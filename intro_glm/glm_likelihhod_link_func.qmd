@@ -1,0 +1,435 @@
+---
+title: "Introducción: modelos lineales generalizados (GLM)"
+format: 
+  html:
+    theme: 
+      light: journal
+      dark: [journal, theme-dark.scss]
+    toc: true
+    toc-depth: 10
+    toc-expand: 10
+    toc-title: "Tabla de contenido"
+    toc-location: left
+    embed-resources: true
+number-sections: true
+number-depth: 10
+editor: visual
+date-format: full 
+date-modified: now
+mainfont: Times New Roman
+code-fold: false
+code-overflow: scroll
+code-line-numbers: true
+code-copy: true
+---
+
+```{r, echo=TRUE, results='hide',  warning = F, message = F}
+
+knitr::opts_chunk$set(echo = TRUE, warning = F, message = F)
+
+paquetes <- c("rethinking", "tidyverse", "magrittr", "cmdstanr", 'rstan', 
+              'patchwork')
+sapply(paquetes, library, character.only = T)
+
+```
+
+# Introducción
+
+En el modelo lineal utilizamos una función de *likelihood* normal para modelar el parámetro $\mu$; esto es, asumimos que los valores de la variable respuesta son continuos no acotados a un máximo o límites particulares. En notación matemática: 
+
+$$
+\begin{aligned}
+&Y_{i} \sim Normal(\mu_i, \sigma) \\
+&\mu_i = \alpha + \beta{x}
+\end{aligned}
+$$ 
+
+En efecto, tamaño, área, temperatura, etcétera, son variables que sin menor dificultad podríamos modelar con una distribución normal. Sin embargo, frecuentemente en ecología analizamos conteos (e.g. abundancias), probabilidades (e.g detección de una especie), o proporciones (e.g. remoción de frutos), etcétera. Modelar dichas variables con una función de *likelihood* normal resultaría en una imprecisa estimación de los parámetros (**Unboxing 1**).
+
+En aquellos casos en los que la distribución normal no es la mejor elección, necesitamos una *generalización* del modelo en términos de la función de *likelihood* que empleamos para denotar los valores posibles de los datos (i.e. la probabilidad de los datos) y una *función de enlace (link function)*. Entonces, el modelo lineal generalizado (GLM, por sus siglas en inglés) consiste en:
+
+$$
+\begin{align}
+&Y_i \sim likelihood(\phi_i,~\theta) \\
+&f(\phi_i) = \alpha + \beta{x}
+\end{align}
+$$ 
+
+Aquí reemplazamos la distribución normal, $Normal(\mu_i, ~ \sigma)$, por una nueva función de likelihood, en este caso $likelihood(\phi_i, ~ \theta)$. Elegimos la nueva función basados en nuestro entendimiento de la variable que planeamos modelar (e.g. se trata de conteos, probabilidades, proporciones, variables positivas con valores extremos, variables ordinales) ---el paquete `fitdistrplus` puede facilitar la tarea, ya que permite comparar la distribución de nuestra variable con el esperado teórico por distintas distribuciones de probabilidad. Seguidamente, en lugar de modelar el parámetro $\phi$ directamente, empleamos la *función de enlace* $f$ para estimarlo en la escala del modelo lineal $\alpha + \beta{x}$. 
+
+En GLMs las funciones de enlace más comunes son la función *log* y *logit*. En casos en los que la variable respuesta está restringida a valores positivos sin un límite superior definido, empleamos el *logaritmo* como función de enlace. Esto es, modelamos $y$ en escala lineal $log$ y la interpretación en la escala de la variable respuesta corresponde a su inverso matemático $e^y$. Esto implica que un cambio en una unidad de $x$ **no** produce un cambio constante en $y$, como en el modelo lineal. En este caso, emplear una función de enlace *log* supone una relación exponencial $y\sim x$.  Veamos:
+
+```{r, echo=F, fig.cap= 'Figura 1. Función de enlace log y su inverso. Las líneas rojas denotan el cambio en una unidad de X', fig.align='center'}
+y <- exp(seq(5, 10, length.out = 1e3))
+x <- seq(5, 10, length.out = 1e3)
+n <- 5:10
+
+par(mfrow = c(1, 2))
+plot(x, y, type = 'l', main = 'Escala de la\n variable respuesta')
+abline(h = sapply(n, function(z) mean(y[x <= (z+0.01) & x >= z])),
+       lty = 3, col = 'red')
+plot(x, log(y), type = 'l', main = 'Escala en la\n función de enlace')
+abline(h = 5:10, lty = 3, col = 'red')
+par(mfrow = c(1, 1))
+```
+
+
+La función de enlace *logit* se emplea para modelar probabilidades y proporciones. Justamente, su propósito es evitar que el modelo $\alpha + \beta{x}$ estime valores de $y$ fuera del intervalo 0 y 1. El *logit* o *log-odds*, se estima como el logaritmo del cociente entre la probabilidad de que el evento ocurra ($p$) y no ocurra ($1-p$):
+$$
+\begin{align}
+logit(p_i) = log(\frac{p_i}{1-p_i})
+\end{align}
+$$
+Entonces,
+
+$$
+log(\frac{p_i}{1-p_i}) = \alpha + \beta{x_i}
+$$
+Y la función logística del *logit*, su inverso, corresponde a:
+
+$$
+p_i = \frac{exp(\alpha + \beta{x_i})}{1 + exp(\alpha + \beta{x_i})}
+$$
+
+El *log-odds* no está restringido a la escala de probabilidad, por el contrario se extiende hacia $-\infty$ y $+\infty$. Valores de cero indican una probabilidad de 0.5 e, igual que con la función de enlace *log* ---en realidad en cualquier GLM---  los cambios en la variable predictora no generan cambios constantes en la respuesta. Veamos un ejemplo:
+
+```{r, echo=FALSE, fig.cap= "Figura 2. Función de enlace logit. Las líneas rojas denotan el cambio en una unidad de X", fig.align='center'}
+x <- 1:100
+y <- 1/(1+exp(0.1*(50-x)))
+y_log <- logit(y)
+n <- seq(0, 100, by = 20)
+
+par(mfrow = c(1, 2))
+plot(x, y, type = 'l', ylab = 'probabilidad', main = 'Función\n logística')
+abline(h = sapply(n, function(z) y[x == z]), lty = 3, col = 'red')
+plot(x, y_log, type = 'l', ylab = 'log-odds', main = 'Función\n logit')
+abline(h = sapply(n, function(z) y_log[x == z]), lty = 3, col = 'red')
+par(mfrow = c(1, 1))
+```
+
+# Ejemplo: modelo logístico
+
+Emplearemos datos de capturas de roedores con trampas Sherman. El estudio se desarrolló en diferentes parches de bosque, y el objetivo es modelar la probabilidad de captura en función a la cobertura de bosque y los años transcurridos desde su fragmentación.
+
+Primero cargamos los datos en `R` y almacenamos las variables en una lista.
+
+```{r}
+d <- read.csv('rodents.csv', header = T)
+
+dat <- 
+  list(
+    obs = d$RODENTSP,
+    edad = d$AGE,
+    vege = d$PERSHRUB
+  )
+
+```
+
+Definimos la previa para el parámetro $\alpha$ (intercepto) del modelo lineal, considerando los valores posibles de log-odds que podría adquirir y sus implicaciones en términos de probabilidad.
+```{r}
+par(mfrow = c(1, 2))
+plot(density((rnorm(1e3, 0, 1.5))), xlab = 'log-odds', main = 'Logit')
+plot(density(inv_logit(rnorm(1e3, 0, 1.5))), xlab = 'Probabilidad', main = 'Inv. Logit')
+par(mfrow = c(1, 1))
+```
+
+Tampoco tenemos muchas certezas sobre la relación entre la relación $P(capturas) \sim vegetación + años$, pero podríamos suponer que una vegetación más abundante favorece la actividad de roedores y por lo tanto sus capturas. No estamos muy confiados, así que utilicemos $Normal(\mu=0.5, \alpha = 1)$, y veamos los supuestos que implican nuestras previas en términos del modelo lineal.
+```{r}
+alpha <- rnorm(1e3, 0, 1.5)
+beta <- rnorm(1e3, 0.5, 1)
+
+par(mfrow = c(1, 2))
+plot(NULL, xlim = c(-20, 20), ylim = c(-20, 20), 
+     ylab = 'Log-odds', xlab = 'X')
+for (i in 1:100) curve(alpha[i] + beta[i]*x, add = T, lwd = 0.2)
+
+plot(NULL, xlim = c(-20, 20), ylim = c(0, 1), 
+     ylab = 'Probabilidad', xlab = 'X')
+for (i in 1:100) curve(inv_logit(alpha[i] + beta[i]*x), add = T, lwd = 0.2)
+par(mfrow = c(1, 1))
+```
+En efecto, esperamos una relación positiva, pero las previas son lo suficientemente amplias como para esperar relaciones inversas. Ajustemos el modelo:
+
+
+```{r}
+m <- 
+  ulam(
+    alist(
+      obs ~ dbinom(1, p),
+      logit(p) <- alpha + beta*edad + tau*vege,
+      alpha ~ dnorm(0, 1.5),
+      beta ~ dnorm(0.5, 1),
+      tau ~ dnorm(0.5, 1)
+    ), data = dat, chains = 3, warmup = 500, iter = 2e3, cores = 3
+  )
+
+precis(m)
+```
+No soy fanático de interpretar modelos con tablas de coeficientes. Por ahora, corroboremos que, para cada parámetro, el número de estimados estadísticamente independientes supera los 1000 y las cadenas convergieron a la "misma" distribución posterior (`Rhat ~ 1`). Todo en orden
+
+
+Grafiquemos las distribuciones predictivas posteriores y veamos la calidad del ajuste del modelo a los datos.
+```{r}
+post <- extract.samples(m)
+
+ppcheck <- sapply(1:length(dat$obs), simplify = 'array', FUN = 
+                    function(x) {
+                      log_odds <- 
+                        with(post, 
+                             {
+                               alpha + beta*dat$edad[x] + tau*dat$vege[x]
+                             })
+                      
+                      rbinom(1e3, 1, inv_logit(log_odds))
+                    })
+
+plot(NULL, xlim = c(-0.5, 1.5), ylim = c(0, 1.7))
+for (i in 1:500) lines(density(ppcheck[i, ]), lwd = 0.1)
+lines(density(dat$obs), col = 'red', lwd = 3)
+```
+Todo en orden.
+
+veamos ahora los efectos condicionales de cada predictor sobre la probabilidad de captura de los roedores 
+
+```{r}
+edad <- seq(min(dat$edad), max(dat$edad), length.out = 100)
+
+est_beta <- 
+  sapply(edad, simplify = 'array', FUN = 
+           function(x) {
+             log_odds <- 
+               with(post, 
+                    {
+                      alpha + beta*x
+                    })
+             inv_logit(log_odds)
+           })
+
+est_beta <- 
+  do.call('rbind', 
+          apply(est_beta, 2, simplify = 'list', FUN = 
+                  function(x) {
+                    tibble(li = quantile(x, 0.025), 
+                           ls = quantile(x, 0.975),
+                           mu = mean(x))
+                  }))
+
+est_beta$x <- edad
+
+plot_edad <- 
+  est_beta |> 
+  ggplot(aes(x, mu, ymin = li, ymax = ls)) +
+  geom_ribbon(alpha = 0.5, fill = 'cyan4') +
+  geom_line(color = 'tan1', linewidth = 1.5) +
+  theme_bw() +
+  lims(y = c(0, 1)) +
+  labs(y = 'Probabilidad', x = 'Años desde la fragmentación') +
+  theme(panel.grid = element_blank(),
+        text = element_text(family = 'Times New Roman'))
+
+veg <- seq(min(dat$vege), max(dat$vege), length.out = 100)
+
+est_tau <- 
+  sapply(veg, simplify = 'array', FUN = 
+           function(x) {
+             log_odds <- 
+               with(post,
+                     {
+                       alpha + tau*x
+                     })
+             inv_logit(log_odds)
+           })
+
+est_tau <- 
+  do.call('rbind', 
+          apply(est_tau, 2, simplify = 'list', FUN = 
+                  function(x) {
+                    tibble(li = quantile(x, 0.025), 
+                           ls = quantile(x, 0.975),
+                           mu = mean(x))
+                  }))
+
+est_tau$x <- veg
+
+plot_vege <- 
+  est_tau |> 
+  ggplot(aes(x, mu, ymin = li, ymax = ls)) +
+  geom_ribbon(alpha = 0.4, fill = 'cyan4') +
+  geom_line(color = 'tan1', linewidth = 1.5) +
+  theme_bw() +
+  labs(y = ' ', x = 'Porcentaje de vegetación') +
+  theme(panel.grid = element_blank(),
+        text = element_text(family = 'Times New Roman'))
+
+plot_edad + 
+  plot_vege +
+  plot_layout(ncol = 2)
+```
+El incremento del porcentaje de vegetación aumenta la probabilidad de capturar roedores, mientras que parches con fragmentación más antigua generan el efecto contrario. Ambos predictores probablemente no son independientes; por ejemplo, el porcentaje de vegetación podría depender de cuán recientemente fue deforestado el parche. Si este fuera el caso, el modelo estaría adecuadamente planteado, ya que estaríamos condicionando la relación $P(capturas) \sim vegetación$ por la edad de la fragmentación.
+
+
+Veamos las distribuciones posteriores de los coeficientes de regresión.
+```{r}
+plot(density(post$beta), xlim = c(-0.15, 0.16), 
+     ylim = c(0, 20), main = "", lwd = 3, 
+     xlab = 'Coeficiente de regresión', ylab = 'Densidad')
+lines(density(post$tau), col = 'tan1', lwd = 3)
+abline(v = 0, lty = 3)
+text(expression(tau), x = mean(post$tau), y = 10, col = 'tan2')
+text(expression(beta), x = mean(post$beta), y = 10)
+
+```
+Sería buena idea comparar nuestra apuesta inicial, i.e. las previas, con lo estimado por el modelo. Veamos cuánto aprendimos:
+
+```{r}
+plot(density(rnorm(1e3, 0.5, 1)), lwd = 2, lty = 3, col = 'red', 
+     main = ' ', xlab = expression('previas'[tau~'-'~beta]))
+lines(density(post$beta), xlim = c(-0.15, 0.16), lwd = 1)
+lines(density(post$tau), col = 'tan1', lwd = 1)
+```
+Las distribuciones posteriores ocupan una región muchísimo menor a lo esperado por la previa.
+
+
+::: border
+# Unboxing 1
+
+Simulemos conteos de gatos ($15~min~conteo^{-1}$) en cuatro barrios de [Villavicencio (Colombia)](https://es.wikipedia.org/wiki/Villavicencio) --- probablemente una de las ciudades más atestadas de gatos en el país, y veamos las implicaciones de usar una función de *likelihood* normal para modelar conteos. 
+
+Simularemos los conteos empleando una distribución de probabilidad $Poisson(\lambda)$. En la próxima sección entraremos en detalle, por ahora, solo necesitas saber que el parámetro $\lambda$ puede entenderse como el número esperado de conteos en una unidad muestreal y una tasa de cambio constante de un conteo a otro. Dicho esto, preparemos los datos. Utilizaremos una distribución uniforme para generar $\lambda$ aleatorios entre 0 y 4. Luego generamos los conteos de gatos.
+
+```{r}
+n_obs <- 50
+
+set.seed(123)
+lambdas <- sample(runif(1e3, 0, 4), 4)
+
+barrios <- sapply(lambdas, simplify = 'array', FUN = 
+                    function(lambda) {
+                      set.seed(123)
+                      rpois(n_obs, lambda)
+                    })
+
+barrios <- as_tibble(barrios)
+colnames(barrios) <- paste(1:4)
+
+barrios <- gather(barrios)
+
+barrios$key <- as.numeric(barrios$key)
+```
+
+Conocemos la ciudad, y suponemos que es probable observar ~7 gatos en cada una de las observaciones. Definimos entonces las probabilidades previas.
+
+```{r}
+
+plot(density(rnorm(1e3, 7, 5)), main = expression(Normal(mu~"=7", sigma~'=5')), 
+     xlab = 'Gatos observados')
+abline(v = 0, col = 'red')
+
+```
+
+```{r}
+sum(rnorm(1e6, 7, 5) < 0) / 1e6
+```
+
+Notemos que la previa implicaría que cerca del 8% de de nuestras observaciones (conteos de gatos) puedan adquirir valores negativos, no una muy buena elección. Pero sigamos. Ajustemos los modelos:
+
+```{r}
+mod_norm <- 
+  ulam(
+    alist(
+      gatos ~ dnorm(mu, sigma), # función de likelihood normal
+      mu <- alpha[barrio],
+      alpha[barrio] ~ dnorm(7, 5),
+      sigma ~ dexp(1)
+    ), data = list(gatos = barrios$value, 
+                   barrio = barrios$key),
+    chains = 3, iter = 2e3, cores = 3
+  ) 
+
+pois_mod <- 
+  ulam(
+    alist(
+      gatos ~ dpois(lambda), # funcion de likelihood Poisson
+      log(lambda) <- alpha[barrio],
+      alpha[barrio] ~ dnorm(7, 5)
+    ), data = list(gatos = barrios$value, 
+                   barrio = barrios$key),
+    chains = 3, iter = 2e3, cores = 3
+  )
+
+```
+
+Salida del modelo normal:
+
+```{r}
+precis(mod_norm, depth = 2)
+```
+
+Salida modelo Poisson:
+
+```{r}
+exp(precis(pois_mod, depth = 2)[, 1, drop = F])
+```
+
+En principio parece que ambos modelos estiman de manera similar los gatos observados promedio. Sin embargo, grafiquemos las distribuciones predictivas posteriores.
+
+```{r}
+
+post_pois <- as_tibble(extract.samples(pois_mod)$alpha)
+
+post_pois <- apply(post_pois, 2, FUN = 
+                     function(x) {
+                       set.seed(555)
+                       rpois(1e3, 
+                             exp(x))
+                     })
+
+post_norm <- as_tibble(do.call('cbind', extract.samples(mod_norm)))
+
+post_norm <- apply(post_norm[, -5], 2, FUN = 
+                     function(x) {
+                       set.seed(555)
+                       rnorm(1e3, x, post_norm$sigma)
+                     })
+
+post_norm <- gather(as_tibble(post_norm))
+post_norm$key <- gsub('(V)(.)', '\\2', post_norm$key)
+post_norm$mod <- rep('norm', nrow(post_norm))
+
+barrios$key <- as.factor(as.character(barrios$key))
+barrios$mod <- rep('obs', nrow(barrios))
+
+gatos_obs <- rbind(barrios, post_norm)
+
+post_pois <- gather(as_tibble(post_pois))
+post_pois$key <- gsub('(V)(.)', '\\2', post_pois$key)
+post_pois$mod <- rep('pois', nrow(post_pois))
+
+gatos_obs <- rbind(gatos_obs, post_pois)
+
+ggplot(gatos_obs, aes(key, value, fill = mod)) +
+  geom_boxplot() +
+  guides(fill = guide_legend(title = 'Modelos')) +
+  labs(x = 'Barrio', y = 'Gatos observados') +
+  geom_hline(yintercept = 0, linetype = 2, color = 'red')
+
+```
+
+En efecto, el modelo Poisson no solo es ligeramente más preciso, sino que además predice los conteos de gatos considerando el límite inferior de nuestra variable, **0!**. Mientras que el modelo normal nos lleva a estimaciones imposibles.
+
+\
+Por ejemplo, en el barrio 4 el modelo normal predice que más del 30% de los conteos de gatos fueron inferiores a cero.
+
+```{r}
+gatos_obs %$% aggregate(value ~ key + mod, 
+                        FUN = function(x) sum(x<0)/length(x))
+```
+
+En este caso la elección incorrecta de una función de *likelihood* no afectó la estimación promedio de los parámetros, pero en modelos más complejos podría tener implicaciones más serias.
+
+:::
+
+```{r}
+sessionInfo()
+```
+

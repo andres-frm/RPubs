@@ -1,0 +1,197 @@
+---
+title: "Distribuciones de probabilidad"
+format: 
+  html:
+    theme: 
+      light: journal
+      dark: [journal, theme-dark.scss]
+    toc: true
+    toc-depth: 10
+    toc-expand: 10
+    toc-title: "Tabla de contenido"
+    toc-location: left
+    embed-resources: true
+number-sections: true
+number-depth: 10
+editor: visual
+date-format: full 
+date-modified: now
+mainfont: Times New Roman
+code-fold: false
+code-overflow: scroll
+code-line-numbers: true
+code-copy: true
+---
+
+```{r, echo=TRUE, results='hide',  warning = F, message = F}
+
+#| results: false
+
+paquetes <- c("rethinking", "tidyverse", "magrittr", 'extrafont',
+              'cowplot', 'gganimate', "cmdstanr", 'bayesplot',
+              'rstan', 'lterdatasampler')
+sapply(paquetes, library, character.only = T)
+
+knitr::opts_chunk$set(echo = TRUE, warning = F, message = F)
+
+```
+
+# Distribuciones de probabilidad
+
+Las distribuciones de probabilidad son ecuaciones que describen, dado unos parámetros particulares, la ocurrencia probabilística de valores en una variable aleatoria. Es decir, las distribuciones de probabilidad son modelos generadores de datos, y se dividen en dos categorías *discretas* y *continuas*.
+
+`R` tienen integrado una gama amplia de distribuciones de probabilidad, con funciones que nos permiten generar números aleatorios, probabilidades teóricas, probabilidades acumuladas y quantiles. En general, las funciones que definen cada distribución tienen un nombre autoexplicativo, pero la sintaxis de todas coincide en la letra inicial:
+
+:::{}
+
+-   `r` para generar número aleatorios.
+-   `d` cálculo de las probabilidades teóricas.
+-   `p` cálculo de las probabilidades teóricas acumuladas.
+-   `q` Estimación de cuantiles.
+
+:::
+
+Por ejemplo: las funciones para el uso de la distribución binomial son `rbinom`, `dbinom`, `pbinom` y `qbinom`. Veamos algunos ejemplos de distribuciones comúnmente empleadas en ecología.
+
+## Distribuciones de probabilidad discretas
+
+\
+
+### $Binomial(n, p)$
+
+Se emplea para modelar probabilidades en [ensayos de Bernoulli](https://es.wikipedia.org/wiki/Ensayo_de_Bernoulli) o número de éxitos en una serie de ensayos.
+
+*Ejemplos: obtener cara o sello en un lanzamiento de moneda, por supuesto; supervivencia de crías en una camada con un valor inicial; remoción de frutos.*
+
+```{r}
+
+par(mfrow = c(2, 2))
+p <- c(0.1, 0.3, 0.6, 0.9)
+for(i in 1:4) hist(rbinom(1e3, 10, p[i]), main = paste('p=', p[i]))
+
+```
+
+### $Poisson(\lambda)$
+
+Es una distribución de probabilidad que describe conteos (i.e. valores discretos). Es un caso especial de la distribución binomial cuando la probabilidad de cada evento de éxito es muy baja.
+
+*Ejemplos: número de semillas, número de visitas florales, número de gatos en Villavicencio.*
+
+```{r}
+par(mfrow = c(2, 2))
+
+lambda <- round(seq(2, 10, length.out = 4))
+
+for(i in 1:4) plot(density(rpois(1e3, lambda[i])), main = paste('lambda=', lambda[i]))
+```
+
+### $Binomial Negativa(\tau, \lambda)$
+
+También conocida como *gamma-poisson* es una distribución de probabilidad que, a diferencia de la poisson, presenta un parámetro de sobredisperción ($\tau$ o `size` en `R`). En un sentido general, este parámetro de dispersión asigna una tasa de ocurrencia diferente a cada evento (i.e. considera variación aleatoria en cada una de las observaciones, en la poisson esta tasa es constante).
+
+*Ejemplos: considera conteos como la distribución Poisson, pero con mayor variabilidad.*
+
+```{r}
+plot(density(rnbinom(1e3, size = 1, mu = 2)))
+```
+
+### $Geometrica(p)$
+
+La distribución geométrica se usa para modelar el éxito de un evento tras un serie repetida de ensayos con igual probabilidad.
+
+*Ejemplo: supongamos que la probabilidad de que un macho de ave del paraíso, cualquiera que sea, consiga aparearse con una hembra después de cortejarla es* $P(apareamiento) = 0.3$. Podemos emplear una distribución geométrica para estimar cuantas hembras debería el macho cortejar para conseguir aparearse ---desde luego, suponiendo que todos los machos y las hembras tienen la misma probabilidad de éxito para cortejar y ser cortejados, respectivamente.
+
+```{r}
+par(mfrow = c(1, 1))
+plot(density(rgeom(1e3, 0.3)))
+```
+
+### $Beta-binomial(n, p, \theta)$
+
+Es una composición entre la distribución binomial y la Beta que, de manera análoga a la Binomial-negativa, emplea un parámetro de sobredispersión. Para emplearla en `R` debemos usar el paquete `emdbook`.
+
+```{r}
+par(mfrow = c(2, 2))
+theta <- round(seq(0.1, 2, length.out = 4), 2)
+for(i in 1:4) plot(density(emdbook::rbetabinom(1e3, 0.3, 10, theta[i])), main = paste('theta =', theta[i]))
+```
+
+## Distribuciones de probabilidad continua
+
+\
+
+### $Uniforme(a, b)$
+
+Modela eventos con igual probabilidad de ocurrencia en un rango $a-b$.
+
+```{r}
+par(mfrow = c(1, 1))
+
+hist(runif(1e3, 0, 1))
+
+```
+
+### $Normal(\mu, \sigma)$
+
+Se emplea para modelar datos continuos sin límites particulares. Su forma lo controlan dos parámetros, la media ($\mu$) y la varianza ($\sigma$).
+
+```{r}
+plot(density(rnorm(1e3, 0, 1)))
+
+```
+
+### $Exponencial(\lambda)$
+
+Es una distribución de probabilidad que está restringida entre 0 e $\infty$. Es frecuentemente empleada para asignar previas a parámetros de dispersión (e.g. $\sigma$ en la distribución normal).
+
+```{r}
+par(mfrow = c(2, 2))
+for (i in 1:4) plot(density(rexp(1e3, i)), 
+                    main = paste('exponential(', i,')', sep = ''))
+```
+
+### $Gamma(k, \theta)$
+
+La distribución gamma está restringida a valores positivos mayores a cero, y su forma está controlada por dos parámetros *shape* ($k = \frac{\mu^2}{\sigma}$) y *rate* ($\theta = \frac{\mu}{\sigma}$). Es la contraparte continua de la distribución binomial-negativa.
+
+*Ejemplo: variables continuas positivas con sobredispersión*
+
+
+```{r}
+par(mfrow = c(2, 2))
+sigma <- round(seq(10, 60, length.out = 4))
+for (i in 1:4) plot(density(rgamma(1e3, 
+                                   shape = (18.8^2)/sigma[i], 
+                                   rate = 18.8/sigma[i])), main = paste('sigma=', sigma[i]))
+```
+
+### $Beta$
+
+Modela valores continuos acotados entre 0 y 1, igual que la uniforme. Es una de las distribuciones más flexibles dadas las combinaciones de valores en sus parámetros.
+
+*Ejemplos: probabilidades o proporciones*
+
+```{r}
+par(mfrow = c(2, 2))
+pars <- expand.grid(c(1:5), c(1:5))
+pars <- pars[sample(1:nrow(pars), 4), ]
+for (i in 1:4) plot(density(rbeta(1e3, pars$Var1[i], pars$Var2[i])),
+                   main = paste('shape1=', pars$Var1[i], '-', 'shape2=', pars$Var2[i]))
+```
+
+### $Lognormal(\mu, \sigma)$
+
+Se usa para modelar valores continuos mayores a cero. El logaritmo de una distribución log-normal es una distribución normal.
+
+```{r}
+par(mfrow = c(1, 2))
+log_norm <- rlnorm(1e3, 0 , 1)
+plot(density(log_norm))
+plot(density(log(log_norm)))
+```
+
+
+```{r}
+sessionInfo()
+```
+

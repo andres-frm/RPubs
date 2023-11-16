@@ -1,0 +1,339 @@
+---
+title: "Inferencia estadística: estimación de parámetros"
+format: 
+  html:
+    theme: 
+      light: journal
+      dark: [journal, theme-dark.scss]
+    toc: true
+    toc-depth: 4
+    toc-expand: 4
+    toc-title: "Tabla de contenido"
+    toc-location: left
+    embed-resources: true
+number-sections: true
+number-depth: 4
+editor: visual
+date-format: full 
+date-modified: now
+mainfont: Times New Roman
+code-fold: false
+code-overflow: scroll
+code-line-numbers: true
+code-copy: true
+---
+
+```{r, echo=TRUE, results='hide',  warning = F, message = F}
+
+knitr::opts_chunk$set(echo = TRUE, warning = F, message = F)
+
+paquetes <- c("rethinking", "tidyverse", "magrittr", "cmdstanr", 'rstan', 
+              'patchwork')
+sapply(paquetes, library, character.only = T)
+```
+
+
+# Introducción
+
+La estadística tiene como fin último extraer y generalizar información a partir de datos puntuales. La usamos para generar y comunicar ideas que direccionan la toma de decisiones o nuestro entendimiento de un sistema ---una definición personal y probablemente acotada del propósito de la estadística. Este proceso de extracción de información se basa en inferir propiedades de un *universo* a partir de la observación imperfecta de los elementos que lo componen. Esto es, tomamos *muestras independientes* de una variable aleatoria, el *universo*, para estimar parámetros que la describen. Son justamente estos parámetros, empaquetados en ecuaciones matemáticas, los que cargan nuestros supuestos acerca de los procesos estocásticos que podrían generaron las observaciones: diferencias de $Y$ entre agrupamientos, tasa de cambio $Y \sim X$ y sus interacciones.
+\
+Existen diferentes métodos para la estimación de parámetros, en este documento presentaré dos: máxima verosimilitud y teorema de Bayes. Me interesan, porque a pesar de la diferencias filosóficas de su origen, en términos prácticos ambas aproximaciones están relacionadas.
+
+# Máxima verosimilitud (maximum likelihood)
+
+Fue un método desarrollado por [Ronald A. Fisher](https://simple.wikipedia.org/wiki/Ronald_Fisher#:~:text=Sir%20Ronald%20Aylmer%20Fisher%20FRS,the%20greatest%20of%20Darwin%27s%20successors%22.) a la tardía edad de **22 años**, como una aproximación general para la estimación de parámetros. La lógica es igual a lo descrito arriba: tenemos observaciones $Y_i$ de una variable aleatoria provenientes de una distribución de probabilidad $f(\phi)$ la cual suponemos generó los datos. Bien, la idea del método de máxima verosimilitud es estimar el parámetro que maximiza la probabilidad de observar los datos. Es decir, buscamos $P(datos|\phi)$. Usemos `R` para entrar en contexto:
+
+\
+
+Supongamos conteos de visitas de polinizadores a flores de arándano en intervalos de 5 minutos:
+
+```{r}
+visitas <- c(5, 3, 8, 6, 3, 10, 5, 6, 7, 7)
+```
+
+La distribución de probabilidad $Poisson(\lambda)$ sería una apuesta razonable como modelo generador de las observaciones. La verosimilitud de estos datos resulta del producto de cada una de la probabilidades de las observaciones dado un $\lambda = n$. Probemos con $\lambda = 3$:
+
+```{r}
+prod(dpois(visitas, lambda = 3))
+```
+Esta es la verosimilitud de observar exactamente estos datos. Ya que la multiplicación de probabilidades resulta en valores muy pequeños, evitamos problemas computacionales calculando la verosimilitud como la suma del logaritmo de la probabilidad de cada observación. 
+
+```{r}
+sum(dpois(visitas, lambda = 3, log = T))
+```
+
+Recordemos que buscamos el "verdadero" valor del parámetros que maximiza la función:
+
+$$
+\begin{align}
+
+logMV(\lambda_i) = P(visitas~|~Poisson(\lambda_i))
+
+\end{align}
+$$
+
+Entonces necesitamos varias apuestas para hallar el valor de $\lambda$ con mayor verosimilitud de haber generado los datos. Veamos en `R`:
+
+```{r}
+lambda <- seq(0.5, 20, length.out = 1e3)
+
+MV <- vector('double', length(lambda))
+
+for (i in 1:length(lambda)) MV[i] <- sum(dpois(visitas, lambda[i], log = T))
+
+
+plot(lambda, MV, type = 'l', xlab = expression(lambda), 
+     ylab = 'log(verosimilitud)')
+abline(v = lambda[which.max(MV)], col = 'red', lty = 3)
+text(4, -60, expression(lambda~paste('= 6.004')))
+
+```
+La parábola denota la verosimilitud o probabilidad de observar las  visitas dado diferentes valores de $\lambda$. En este caso, el valor de $\lambda$ que maximiza la verosimilitud es $\lambda = 6.004$.
+
+\
+
+Recordemos que las visitas que observamos son unas de, en teoría, infinitas observaciones posibles dada la distribución de probabilidad y los parámetros reales de la población. Usemos entonces nuestro parámetro estimado para simular el número de visitas que potencialmente podríamos registrar: 
+
+```{r}
+plot(density(visitas), ylim = c(0, 0.35), 
+     col = 'red', lwd = 3, main = '', xlab = 'Visitas')
+for (i in 1:100) lines(density(rpois(length(visitas), lambda[which.max(MV)])), lwd = 0.1)
+```
+
+# Teorema de Bayes
+
+Para comenzar, es útil mencionar que la regla, o teorema, de Bayes es un método para calcular la probabilidad inversa. Es decir, $P(\phi~\cap~datos)\times P(datos) = P(datos~\cap~\phi) \times P(\phi)$. Esta probabilidad inversa emerge de la derivación del teorema de Bayes empleando la regla de las probabilidades condicionales. Veamos:
+
+La probabilidad de los `datos` dado el parámetro $\phi$ (**LA VEROSIMILITUD!!!**), es igual al cociente entre su probabilidad conjunta y la probabilidad de $\phi$. En notación matemática:
+$$
+\begin{aligned}
+P(datos | \phi) = \frac{P(datos~\cap~\phi)}{P(\phi)}
+\end{aligned}
+$$
+Despejando $P(datos~\cap~\phi)$ tenemos:
+
+$$
+\begin{aligned}
+P(datos | \phi)\times P(\phi) = P(datos~\cap~\phi)
+\end{aligned}
+$$
+Y dado que la probabilidad de eventos independientes es igual al producto de sus probabilidades (o a la suma del logaritmo de sus probabilidades --arriba lo hicimos para generar la curva de máxima verosimilitud!), entonces  $P(datos~\cap~\phi) = P(\phi~\cap~datos)$. Por lo tanto:
+
+$$
+\begin{aligned}
+P(\phi | datos)\times P(datos) = P(datos | \phi)\times P(\phi)~~~~(!probabilidad~inversa!)
+\end{aligned}
+$$
+La regla de Bayes emerge entonces de:
+
+$$
+\begin{aligned}
+P(\phi | datos) = \frac{P(datos | \phi)\times P(\phi)}{P(datos)}
+\end{aligned}
+$$
+La idea central de la aproximación bayesiana es confrontar nuestras **creencias previas** acerca de un fenómeno, i.e. nuestra hipótesis, con observaciones actuales del mismo (i.e. los datos). **Posteriormente** el análisis busca **actualizar** nuestro conocimiento a la luz de la nueva evidencia. Antes de continuar, hagamos una ligera digresión para explicar mi uso premeditado de las palabras en negrilla. En estadística frecuentista la probabilidad se define como la frecuencia relativa con la que ocurre un evento dado muchos ensayos posibles. Veamos el típico ejemplo de lanzamiento de una moneda, en este caso supongamos que cinco personas se tomaron el trabajo de realizar 1000 lanzamientos y calcularon la frecuencia agregada de *caras*:
+
+```{r}
+seed <- c(3, 34, 30, 36, 57)
+cols <- c('red', 'tan1', 'cyan4', 'green4', 'yellow')
+plot(NULL, xlim = c(0, 1e3), ylim = c(0.2, 0.8),
+     ylab = 'Proporción de caras', xlab = 'Lanzamiento moneda')
+for (j in 1:5) {
+  set.seed(seed[j])
+  lanzamiento <- rbinom(1e3, 1, 0.5)
+  for (i in 1:1e3) points(i, mean(lanzamiento[1:i]), col = cols[j], pch = 1)
+}
+abline(h = 0.5)
+```
+En Bayes, por el contrario, la definición de la probabilidad es epistémica. Es decir, surge de nuestras creencias o conocimiento previo del fenómeno, el cual representamos en forma de distribuciones de probabilidad de parámetros. Continuemos con el ejemplo de la moneda:
+
+Ahora incluyamos a alguien más en el experimento. Esta vez, el participante debe hacer una apuesta inicial acerca de la frecuencia de caras y emplear el teorema de Bayes para actualizar dicha creencia con cada lanzamiento de la moneda. Por alguna razón, esta persona supone que la frecuencia de caras es más baja que la de sello, y lo expresa usando una distribución $beta(1, 1)$. En estadística bayesiana esta *apuesta inicial* se conoce como **distribución previa**, se trata de $P(\phi)$ en el la regla de Bayes. Veamos gráficamente lo que implica:
+
+```{r}
+grilla <- seq(0.001, 0.999, length.out = 1e3)
+previa <- dbeta(grilla, 1.5, 7)
+plot(previa ~ grilla, type = 'l')
+```
+
+El objeto `grilla` corresponde a "todos" los valores posibles que puede adquirir `p` (i.e. la probabilidad de obtener cara). Ahora generemos los lanzamientos dada una `p` conocida ---para nosotros, no para los participantes---, y finalmente generemos un objeto para almacenar la actualización de la *previa* con cada nuevo lanzamiento. 
+
+```{r}
+p_real <- 0.5
+obs <- rbinom(1e3, 1, prob = p_real)
+previa_actualizada <- vector('list', 1e3)
+```
+
+Dicha actualización, en inglés *Bayes updating*, consiste en usar la regla de Bayes para generar una *distribución posterior* a partir de la verosimilitud y la *distribución previa*. Comencemos con la simulación:
+
+```{r}
+for (i in 1:length(previa_actualizada)) {
+  previa <- dbinom(obs[i], 1, prob = grilla) * previa # i.
+  previa <- previa/sum(previa) # ii.
+  previa_actualizada[[i]] <- previa # iii.
+}
+```
+
+:::{}
+i. Iteramos sobre cada $observación_i$ (`obs[i]`) para generar una distribución posterior ($P(\phi | datos)$) dado el producto de la verosimilitud ($P(datos | \phi)$ = `dbinom(obs[i], 1, prob = grilla)`) y la distribución previa ($P(\phi)$ = $beta(1, 1)$ = `previa`). En este punto es importante aclarar que:
+
+
+$$
+
+\begin{aligned}
+
+P(\phi~|~datos) \propto P(datos~|~\phi) \times P(\phi)
+
+\end{aligned}
+
+$$
+
+Es por esto que no incluimos en el cálculo $P(datos)$. 
+
+ii. Normalizamos la previa para facilitar la visualización.
+
+iii. Almacenamos la distribución posterior, y volvemos al paso *i* para usarla como una previa actualizada en la $observación_{i+1}$.
+:::
+
+Grafiquemos el proceso de actualización de la previa con cada observación.
+```{r}
+previa <- dbeta(grilla, 1.5, 7)/sum(dbeta(grilla, 1.5, 7))
+plot(NULL, xlim = c(0, 0.73), ylim = c(0, 0.025), 
+     ylab = 'Densidad', xlab = 'P(cara)')
+for (i in 1:1000) lines(previa_actualizada[[i]] ~ grilla, lwd = 0.05)
+lines(previa ~ grilla, col = 'red')
+abline(v = p_real, lty = 1,col = 'red')
+```
+
+Cada línea negra corresponde a una distribución posterior, la roja corresponde a la previa inicial . Notemos como con cada actualización de la previa dada la $observación_{i+1}$, las distribuciones se mueven a la derecha ubicándose sobre *P ~ 0.5* (línea vertical roja).
+
+
+Ahora comparemos la o el participante bayesiana (cian) con los frecuentistas (negro).
+
+```{r}
+seed <- c(3, 34, 30, 36, 57)
+plot(NULL, xlim = c(0, 1e3), ylim = c(0.2, 0.8),
+     ylab = 'Proporción de caras', xlab = 'Lanzamiento moneda')
+for (j in 1:5) {
+  set.seed(seed[j])
+  lanzamiento <- rbinom(1e3, 1, 0.5)
+  for (i in 1:1e3) points(i, mean(lanzamiento[1:i]), col = 'black', pch = j)
+}
+
+for (i in 1:1000) points(i, grilla[which.max(previa_actualizada[[i]])], 
+                         col = 'cyan4', pch = 1)
+abline(h = 0.5, col = 'red')
+```
+
+## Estimando más de un parámetro (Bayes)
+
+Frecuentemente nos interesa estimar más de un parámetro, lo que implica una maquinaria ligeramente más sofisticada pero que sigue la misma lógica. Veamos un ejemplo con una distribución de probabilidad cuya forma está controlada por más de un parámetro. 
+
+Una bióloga interesada en estudiar pingüinos en la Antártida decidió estimar el largo promedio del pico de pingüinos de adelie hembras (*Pygoscelis adeliae*). Veamos al personaje:
+
+![*Pygoscelis adeliae*. *Los datos de este ejemplo provienen del paquete de `R` `palmerpenguins`. Puede consultar más sobre este data set en <https://allisonhorst.github.io/palmerpenguins/>*](/Users/andres/Documents/github_repos/RPubs/inferencia_est/adelie-penguin.png){width=25%}
+
+
+Por la razón que sea, la investigadora midió el pico de cinco individuos. Usaremos estos datos y la regla de Bayes para estimar su tamaño promedio y variación. Comencemos:
+
+Supongamos que el data set `palmerpenguins` contiene un censo (i.e. la totalidad) de los pingüinos adelie, y seleccionemos los cinco individuos medidos:
+
+```{r}
+poblacion <- palmerpenguins::penguins
+
+poblacion <- poblacion[poblacion$species == 
+                         levels(poblacion$species)[1] & #adelie
+         poblacion$sex == levels(poblacion$sex)[1], ] # hembras
+
+poblacion <- na.omit(poblacion[, c("species", "bill_length_mm")])
+
+set.seed(555)
+muestra <- sample(poblacion$bill_length_mm, 5)
+```
+
+Suponemos que una distribución normal es el modelo generador de los datos. Por lo tanto debemos definir el espacio de los parámetros $\mu$ y $\sigma$, me refiero a "todos" los valores posibles que podrían adquirir.
+```{r}
+mu <- seq(min(poblacion$bill_length_mm),
+          max(poblacion$bill_length_mm), length.out = 1000)
+
+sd <- seq(0.1, 10, length.out = 1000)
+
+grilla <- as_tibble(expand.grid(mu, sd))
+
+colnames(grilla) <- c('mu', 'sd')
+```
+
+Ahora la previa. La investigadora no está muy segura sobre qué esperar, así que decide emplear una distribución uniforme cuyo mínimo y máximo están dados por los valores conocidos para la especie.
+```{r}
+set.seed(555)
+previa <- runif(1e3, min(poblacion$bill_length_mm), 
+                max(poblacion$bill_length_mm))
+hist(previa, ylab = 'Frecuencia', xlab = 'Tamaño del pico (mm)', main = '')
+```
+
+Ahora definamos una función para estimar la distribución posterior de ambos parámetros.
+```{r}
+likelihood_fun <- function(m) {
+  likelihood <- dnorm(m, mean = grilla$mu, sd = grilla$sd) # verosimilitud
+  
+  posterior <- likelihood * previa # regla de bayes
+  posterior <- posterior / sum(posterior) # normalización
+  
+  set.seed(123)
+  posterior <- 
+    tibble(mu = sample(grilla$mu, 
+                       size = 2e3,
+                       prob = posterior,
+                       replace = T),
+           sd = sample(grilla$sd, 
+                       size = 2e3,
+                       prob = posterior,
+                       replace = T))
+}
+
+posterior <- likelihood_fun(muestra)
+```
+
+Grafiquemos en una dimensión nuestros hallazgos 
+
+```{r}
+gather(posterior) |> 
+  ggplot(aes(value, after_stat(scaled))) +
+  geom_density(fill = 'lightblue', color = 'lightblue', 
+               alpha = 0.5, linewidth = 2) +
+  facet_wrap(~key, scales = 'free') +
+  labs(x = 'Valor estimado del parámetro', 
+       y = 'Densidad de probabilidad', 
+       subtitle = expression('Longitud del pico'['adelie']~'~'~'Normal('~mu~','~sigma~')')) +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        text = element_text(family = 'Times New Roman'))
+```
+
+Ahora, hagamos lo mismo en 2 dimensiones e incluyamos líneas indicadoras rojas del valor "real" de los parámetros. Los colores más cálidos indican mayor concentración de estimados de los parámetros, me refiero a la cúspide de las distribuciones. 
+
+```{r}
+ggplot(posterior, aes(mu, sd)) +
+  geom_density2d_filled() +
+  geom_point(size = 0.5, alpha = 0.5) +
+  geom_vline(xintercept = mean(poblacion$bill_length_mm), color = "red",
+             linetype = 2) +
+  geom_hline(yintercept = sd(poblacion$bill_length_mm), color = "red",
+             linetype = 2) +
+  lims(x = c(28, 45), y = c(-1, 12)) +
+  labs(x = expression(mu), y = expression(sigma), 
+       subtitle = "Tamaño del pico `Adelie`") +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        text = element_text(family = 'Times New Roman'),
+        legend.position = 'none')
+```
+
+
+_________________________________
+
+En este documento presento, espero que con algo de éxito, los fundamentos teóricos y prácticos para la estimación de parámetros empleando máxima verosimilitud y teorema de Bayes. Los ejemplos tienen como objetivo poner de manifiesto la lógica subyacente de lo que hacemos y, por lo tanto, necesariamente son simples. El análisis de problemas complejos requiere algoritmos sofisticados. En `R`, el paquete `bbmle` permite ajustar modelos empleando máxima verosimilitud y diferentes algoritmos de optimización para estimar el valor de los parámetros. En el resto de las secciones presento como usar el algoritmo MCMC por medio de `Stan`, para estimar la distribución posterior de parámetros en modelos lineales simples, GLM y modelos jerárquicos.
+
+
+
+
+

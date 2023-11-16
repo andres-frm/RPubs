@@ -1,0 +1,844 @@
+---
+title: "Introduccion modelos jerarquicos (I)"
+format: 
+  html:
+    theme: 
+      light: journal
+      dark: [journal, theme-dark.scss]
+    toc: true
+    toc-depth: 10
+    toc-expand: 10
+    toc-title: "Tabla de contenido"
+    toc-location: left
+    embed-resources: true
+number-sections: true
+number-depth: 10
+editor: visual
+date-format: full 
+date-modified: now
+mainfont: Times New Roman
+code-fold: false
+code-overflow: scroll
+code-line-numbers: true
+code-copy: true
+---
+
+```{r, echo=TRUE, results='hide',  warning = F, message = F}
+
+knitr::opts_chunk$set(echo = TRUE, warning = F, message = F)
+
+paquetes <- c("rethinking", "tidyverse", "magrittr", 'patchwork', 'rstan')
+sapply(paquetes, library, character.only = T)
+
+```
+
+# Introducción
+
+Los modelos jerárquicos (mixtos o multinivel), corresponden a un grupo de modelos estadísticos que permiten incorporar explícitamente la jerarquía de la variación en los datos. Esto es, estiman la distribución posterior de los parámetros del modelo a través agrupamientos parciales (*partial pooling*) de los grupos, donde los parámetros particulares de cada grupo se estima de una distribución de probabilidad de la **"poblacional"** de grupos --- i.e. una distribución de probabilidad de coeficientes. Dado que todos los grupos provienen de una misma distribución de probabilidad, las observaciones de un grupo ayudan a estimar los coeficientes de otro. Lo que resulta ventajoso cuando el esfuerzo de muestreo no está balanceado entre grupos. Veamos un ejemplo, aclaremos la idea de agrupamientos en los datos y sus implicaciones para la estimación de los coeficientes en un modelo jerárquico.
+
+Modelemos la probabilidad de supervivencia de huevos en 50 nidadas de una ave cualquiera en un parche de bosque. Tenemos tres alternativas:
+
+:::{}
+
+i.  Modelar los datos asumiendo que todos los nidos tienen igual probabilidad $p$ de ser depredados (**pooling**), y por lo tanto estimando un único parámetro común para todos. Esto es, asumimos que la variación entre nidos es cero.
+
+ii. Estimar de manera independiente el coeficiente $p$ para cada nido (**no pooling**).
+
+iii. Estimar $p$ para cada nido, pero asumiendo que cada $p_i$ hace parte de una distribución de probabilidad $Binomial(p)$ de la población de nidos (**partial pooling**).
+
+:::
+
+Simulemos los datos
+
+```{r}
+n <- 50 # número de nidos
+set.seed(123)
+p <- rbeta(n, 3, 5) # probabilidad real de supervivencia
+set.seed(123)
+huevos <- sample(rpois(1e3, 10), n) # huevos iniciales
+set.seed(123)
+y <- rbinom(n, huevos, p) # huevos totales
+
+dat <- list(surv = y,
+            huevos = huevos,
+            nido = 1:n)
+```
+
+Ajustemos el modelo *pooling*.
+
+```{r, results='hide'}
+pooling <- 
+  ulam(
+    alist(
+      surv ~ dbinom(huevos, p),
+      logit(p) <- alpha,
+      alpha ~ dnorm(5, 2.5) # previa para los nidos 
+    ), data = dat, chains = 3, cores = 3, iter = 2e3, warmup = 500,
+    log_lik = T
+  )
+
+```
+
+Modelo *no pooling*
+
+```{r, results='hide'}
+no_pooling <- 
+  ulam(
+    alist(
+      surv ~ dbinom(huevos, p),
+      logit(p) <- alpha[nido], # Estratificación por nido
+      alpha[nido] ~ dnorm(5, 2.5) # probabilidad independiente para cada nido
+    ), data = dat, chains = 3, cores = 3, iter = 2e3, warmup = 500,
+    log_lik = T
+  )
+
+```
+
+Modelo *partial pooling*
+
+```{r, results='hide'}
+par_pool <- 
+  ulam(
+    alist(
+      surv ~ dbinom(huevos, p),
+      logit(p) <- alpha[nido],
+      alpha[nido] ~ dnorm(mu, sigma), # previa de la población de nidos (previa adaptable) (hiper parámetros)
+      mu ~ dnorm(5, 2.5), # previa del nido promedio (hiper previa)
+      sigma ~ dexp(1) # (hiper previa)
+    ), data = dat, chains = 3, cores = 3, iter = 5e3, warmup = 1e3,
+    log_lik = T
+  )
+
+```
+
+El modelo *partial pooling* recibe el nombre de modelo jerárquico, porque la estimación de los parámetros se realiza en varios niveles. Veamos en notación matemática el modelo anterior:
+
+$$
+\begin{align}
+&Sup.~huevos_i \sim Binomial(huevos_i,~p_i) & ,~Funcion~de~likelihhod \\
+&logit(p_i) \sim \alpha[nido_i] &,~Modelo~lineal \\
+&\alpha[nido] \sim Normal(\mu_j, \sigma_j) &,~Previa~para~la~población~de~nidos \\
+&\mu_j \sim Normal(5, 2.5) &,~Previa~para~cada~nido~(hiperparámetro) \\ 
+&\sigma_j \sim exponential(1) &,~Previa~para~cada~nido~(hiperparámetro) \\ 
+\end{align}
+$$ $\mu_j$ y $\sigma_j$ se conocen como *hiperparámetros* porque son parámetros de parámetros (la previa poblacional), por la misma razón $Normal(5, 2.5)$ y $exponential(1)$ se les llama *hiper-previas*.
+
+Usemos el `WAIC` para comparar los tres modelos en términos de su capacidad predictiva fuera de la muestra:
+
+```{r}
+compare(par_pool, no_pooling, pooling)
+```
+
+El WAI del modelo jerárquico es notablemente más bajo comparado con los modelos *pooling* y *no pooling* (i.e. tiene un mayor poder predictivo). Veamos qué tan precisa es la estimación del log-odds de los modelos jerárquico y *pooling*:
+
+```{r}
+log_odds_P <- extract.samples(no_pooling)
+log_odds_parP <- extract.samples(par_pool)
+
+plot(NULL, xlim = c(-5, 5), ylim = c(0, 1.2), xlab = 'log-odds nidos', 
+     ylab = 'Densidad')
+for (i in 1:500) {
+  curve(dnorm(x, log_odds_parP$mu[i], log_odds_parP$sigma[i]), 
+        lwd = 0.1, add = T, col = "red")
+  lines(density(log_odds_P$alpha[i, ]), lwd = 0.1, col = 'tan1')
+}
+curve(dnorm(x, mean(log_odds_parP$mu), mean(log_odds_parP$sigma)), add = T,
+      col = 'red', lwd = 2.5)
+lines(density(apply(log_odds_P$alpha, 2, mean)), col = 'tan1', lwd = 2.5) 
+lines(density(logit(rbeta(1e3, 3, 5))), col = 'black', lwd = 2.5)
+```
+
+Ambos modelos predicen bien el promedio del log-odd real (negro). Sin embargo, notemos la amplitud de las distribuciones posteriores, la estimación del modelo jerárquico (rojo) es mucho más precisa comparada con la del modelo *pooling* (naranja).
+
+Ahora comparemos el error de la probabilidad de supervivencia estimada por ambos modelos, con la probabilidad "real" --- la simulada a partir de $Beta(\phi_1 = 3, \phi_2= 5)$.
+
+```{r}
+post_parPool <- extract.samples(par_pool)
+post_parPool <- as_tibble(post_parPool$alpha)
+colnames(post_parPool) <- paste('nido', 1:n, sep = '')
+post_parPool <- do.call('rbind', apply(post_parPool, 2, simplify = 'list', FUN = 
+                                        function(x) {
+                                          tibble(li = quantile(x, 0.025),
+                                                 ls = quantile(x, 0.975),
+                                                 mu = mean(x),
+                                                 mod = 'Par pooling')
+                                        }))
+
+post_parPool$x <- paste('nido', 1:n, sep = '')
+
+
+post_noPool <- extract.samples(no_pooling)
+
+
+post_noPool <- as_tibble(post_noPool$alpha)
+colnames(post_noPool) <- paste('nido', 1:n, sep = '')
+post_noPool <- do.call('rbind', apply(post_noPool, 2, simplify = 'list', FUN = 
+                                        function(x) {
+                                          tibble(li = quantile(x, 0.025),
+                                                 ls = quantile(x, 0.975),
+                                                 mu = mean(x),
+                                                 mod = 'No pooling')
+                                        }))
+
+post_noPool$x <- paste('nido', 1:n, sep = '')
+
+mods <- rbind(post_noPool, post_parPool)
+
+for (i in 1:3) mods[[i]] <- inv_logit(mods[[i]])
+
+```
+
+```{r, fig.height= 20}
+ggplot() +
+  geom_errorbar(data = mods, aes(x = x, ymin = li, ymax = ls, color = mod),
+                position = position_dodge(width = 0.7), width = 0) +
+  geom_point(data = mods, aes(x = x, y = mu, color = mod), 
+             position = position_dodge(width = 0.7)) +
+  geom_point(data = tibble(y = p, 
+                           x = paste('nido', 1:n, sep = '')),
+             aes(x, y)) +
+  geom_hline(yintercept = mean(p), linetype = 2) +
+  labs(y = 'Probabilidad', x = NULL) +
+  coord_flip() +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        legend.title = element_blank(), 
+        legend.position = 'top')
+```
+
+Los puntos negros corresponden a la probabilidad de supervivencia real. Pareciera que los valores predichos por el modelo jerárquico están, en general, más cercanos a la probabilidad de supervivencia real de los nidos. Calculemos este error de estimación y veamos cómo se comporta con el tamaño de la muestra (i.e. número de huevos observados por nido).
+
+```{r}
+mods$real_p <- rep(p, 2)
+mods$sample_size <- c(huevos, huevos)
+
+mods$error <- mods %$% abs(mu - real_p)
+
+ggplot(mods, aes(sample_size, error, color = mod)) +
+  geom_point() +
+  geom_smooth(method = 'lm', se = F) +
+  labs(x = 'Tamaño de la muestra', y = 'Error P(supervivencia)') +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        legend.title = element_blank(), 
+        legend.position = 'top')
+```
+
+En ambos modelos el error decrece con el aumento del tamaño de muestra; es natural, más datos por lo general proveen más información y, por lo tanto, una estimación más precisa de los coeficientes. Notemos, sin embargo, que en promedio el modelo jerárquico (*par pooling*) estima la probabilidad de supervivencia con un menor error, aunque para ambos modelos este valor tiende a converger con el incremento del tamaño de muestra.
+
+# Modelos con más de un agrupamiento
+
+En el ejemplo anterior modelamos la probabilidad de supervivencia de huevos en 50 nidadas del ave *X* ubicadas en un parche de bosque cualquiera. Supongamos que la investigadora decidió expandir la investigación, duplicar el número de nidadas analizadas y distribuir su esfuerzo de muestreo en 9 parches de bosques adicionales. Ahora, dado el nuevo diseño, la supervivencia de los huevos no solo varía en función del nido, sino también dado el parche de bosque en el que se encuentra el nido.
+
+Generemos los datos y describamos el modelo en notación matemática:
+
+```{r}
+n_nidos <- 100
+n_parches <- 10
+
+set.seed(555)
+p <- rbeta(n_nidos, 3, 5)# probabilidad de visita (5 min) sin efecto
+
+set.seed(555)
+huevos <- rpois(n_nidos, 10)
+
+set.seed(555)
+var_parche <- rnorm(1e3, 0, 0.05)
+
+set.seed(555)
+var_parche <- sample(var_parche[var_parche >= 0], n_parches, replace = F)
+var_parche <- sapply(var_parche, simplify = 'array', FUN = 
+                      function(x) rnorm(n_parches, 0, x))
+var_parche <- as.vector(var_parche)
+
+set.seed(555)
+huevos_obs <- rbinom(n_nidos, 
+                     prob = p + var_parche, 
+                     size = huevos)
+dat <- 
+  list(
+    n = huevos,
+    superv = huevos_obs,
+    parche = rep(1:10, each = 10),
+    nido = 1:100
+  )
+```
+
+\\ 
+
+$$
+\begin{align}
+&Sup.~huevos_i \sim Binomial(huevos_i,~p_i) & ,~Funcion~de~likelihhod \\
+&logit(p_i) \sim \alpha[nido_i] + \psi[parche] &,~Modelo~lineal \\ 
+&\psi[parche] \sim Normal(0, \tau) &,~Previa variación~entre~parches\\
+&\tau \sim exponential(1) &, ~ Hiper-parámetro/previa~de~la~previa~del~parche\\
+&\alpha[nido] \sim Normal(\mu_j, \sigma_j) &,~Previa~para~la~población~de~nidos \\
+&\mu_j \sim Normal(5, 2.5) &,~Previa~para~cada~nido~(hiperparámetro) \\ 
+&\sigma_j \sim exponential(1) &,~Previa~para~cada~nido~(hiperparámetro) \\ 
+\end{align}
+$$
+
+El parche corresponde a un factor que altera la supervivencia de los huevos. Es decir, $p_i$ reduce o aumenta en función del parche. Dichas oscilaciones las incorporamos en el modelo en forma de una distribución $Normal(0, \tau)$, donde $\tau$ controla la 'magnitud' de los cambios positivos o negativos.
+
+Ajustemos el modelo:
+
+```{r, results='hide'}
+mod <- 
+  ulam(
+    alist(
+      superv ~ dbinom(n, p),
+      logit(p) <- alpha[nido] + psi[parche],
+      # previas poblacionales
+      alpha[nido] ~ dnorm(mu_j, alpha_j),
+      psi[parche] ~ dnorm(0, tau),
+      # Hiperparámetros (previas nido y parche)
+      mu_j ~ dnorm(5, 2.5),
+      alpha_j ~ dexp(1),
+      tau ~ dexp(1)
+    ), data = dat, chains = 3, warmup = 500, iter = 6e3, cores = 3 
+  )
+
+```
+
+```{r}
+precis(mod)
+```
+
+Tenemos un parámetro por cada nido, uno por cada parche y su parámetro de dispersión y la probabilidad de supervivencia promedio. Antes de discutir las implicaciones de los parámetros, grafiquemos las distribuciones predictivas posteriores y estimemos la precisión del modelo para representar las observaciones.
+
+```{r}
+post <- extract.samples(mod)
+
+post <- lapply(post, FUN = 
+                function(x) {
+                  apply(as.matrix(x), 2, inv_logit)
+                })
+
+ppcheck <- sapply(1:100, simplify = 'array', FUN = 
+                    function(x) rbinom(1e3, 
+                                       size = dat$n, 
+                                       prob = post$mu_j[i]))
+
+plot(NULL, xlim = c(0, 10), ylim = c(0, 0.6))
+for (i in 1:100) lines(density(ppcheck[i, ]), lwd = 0.15, col = 'blue')
+lines(density(dat$superv), col = 'red', lwd = 3)
+abline(v = c(mean(apply(ppcheck, 2, mean)), mean(dat$superv)), 
+       col = c('blue', 'red'), lty = 3)
+
+```
+
+El modelo se ajusta adecuadamente a los datos, incluso el promedio estimado de huevos supervivientes es básicamente igual al observado.
+
+Veamos las implicaciones de los parámetros
+
+```{r}
+par(mfrow = c(1, 2))
+plot(NULL, xlim = c(0, 1), ylim = c(0, 6), xlab = expression(italic('P')['nido']),
+     ylab = 'Densidad', main = 'Nido')
+for (i in 1:100) lines(density(post$alpha[, i, drop = T]), lwd = 0.2)
+lines(density(apply(post$alpha, 2, mean)), lwd = 3, col = 'red')
+lines(density(p + var_parche), lwd = 3, col = 'blue')
+plot(density(post$alpha_j), main = "Parche", xlim = c(0.47, 0.81), 
+     xlab = expression(sigma[italic(P)]), ylab = '')
+lines(density(post$tau), lty = 2)
+par(mfrow = c(1, 1))
+```
+
+**Izquierda**. Cada línea de densidad negra corresponde a la distribución posterior de $p$ para cada nido, la línea roja denota el promedio entre nidos ---igual que el parámetro $\mu_i$ en el modelo, y la línea azul corresponde a la probabilidad real (i.e. probabilidad de supervivencia, $Beta(3, 5)$, más variación dado el parche, $Normal(0, \tau)$). **Derecha**. Distribución posterior de los parámetros de dispersión de los nidos (línea sólida) y los parches (línea discontinua).
+
+La probabilidad de supervivencia promedio es del *\~40%*.
+
+```{r}
+mean(apply(post$alpha, 2, mean))
+```
+
+De hecho, el modelo fue capaz de recuperar la distribución de probabilidad generadora de los datos (línea azul). También, con seguridad, podemos afirmar que la variación en la probabilidad de supervivencia entre nidos es mayor a la producida por los diferentes parches. Podríamos generar un nuevo modelo sin el factor parche, compararlos con `WAIC`, y evaluar el aporte del parche en la capacidad predictiva del modelo.
+
+Podríamos concluir (ponele...), que los factores que determinan la probabilidad de supervivencia de huevos en nidos del ave `X` operan principalmente a escala local ---la principal variación proviene del `nido`, mientras que el aporte del `parche` es tangencial. **Supongamos que la investigadora alcanzó la misma conclusión y, en un intento de identificar dichos factores locales moduladores de la supervivencia, decidió medir la proporción de cobertura vegetal en un radio de 1 m alrededor de cada nido. Veamos:**
+
+
+
+# Transisiones divergentes y reparametrización 
+
+De nuevo simulemos los datos y definamos el modelo.
+
+```{r}
+n_nidos <- 100
+n_parches <- 10
+
+set.seed(555)
+p <- rbeta(n_nidos, 3, 5)
+
+set.seed(555)
+huevos <- rpois(n_nidos, 10)
+
+set.seed(555)
+var_parche <- rnorm(1e3, 0, 0.1)
+
+set.seed(555)
+var_parche <- sample(var_parche[var_parche >= 0], n_parches, replace = F)
+var_parche <- sapply(var_parche, simplify = 'array', FUN = 
+                       function(x) rnorm(n_parches, 0, x))
+var_parche <- as.vector(var_parche)
+
+tot_p <- p + var_parche
+
+set.seed(555)
+pro_veg <- rbeta(1e3, 2, 1.5)
+
+temp2 <- quantile(pro_veg, probs = seq(0, 1, by = 0.2))
+temp <- quantile(tot_p, probs = seq(0, 1, by = 0.2))
+
+veg <- vector('double', 100)
+
+set.seed(555)
+for (i in 1:(length(temp)-1)) {
+  veg[which(tot_p >= temp[i] & tot_p <= temp[i+1])] <- 
+    sample(pro_veg[pro_veg > temp2[i] & pro_veg <= temp2[i+1]], 
+           size = length(which(tot_p >= temp[i] & tot_p <= temp[i+1])), 
+           replace = F) + 
+    rnorm(length(which(tot_p >= temp[i] & tot_p <= temp[i+1])), 
+          0, 0.05)
+}
+
+set.seed(555)
+beta_veg <- 0.1
+
+set.seed(555)
+huevos_obs <- rbinom(n_nidos, 
+                     prob = p + var_parche + beta_veg*veg, 
+                     size = huevos)
+dat <- 
+  list(
+    n = huevos,
+    superv = huevos_obs,
+    parche = rep(1:10, each = 10), 
+    prop_veg = veg,
+    nido = 1:100
+  )
+
+```
+
+En principio, ajustemos el modelo anterior, pero incluyamos un parámetro $\beta$ que controle la relación entre la supervivencia de huevos y la proporción de cobertura vegetal. Esto es:
+
+$$
+\begin{align}
+&Supervivencia_i \sim Binomial(huevos_i,~p_i) \\
+&logit(p_i) \sim \alpha[nido_i] + \psi[parche] + \beta\times{prop. vegetación}\\
+&\beta \sim Normal(0.5, 1)\\
+&\psi[parche] \sim Normal(0, \tau) \\
+&\tau \sim exponential(1) \\
+&\alpha[nido] \sim Normal(\mu_j, \sigma_j) \\
+&\mu_j \sim Normal(5, 2.5) \\ 
+&\sigma_j \sim exponential(1) \\ 
+\end{align}
+$$
+```{r, warning=T, results='hide'}
+mod2.1 <- 
+  ulam(
+    alist(
+      superv ~ dbinom(n, p),
+      logit(p) <- alpha[nido] + psi[parche] + beta*prop_veg,
+      beta ~ dnorm(0.5, 1),
+      alpha[nido] ~ dnorm(mu, sigma),
+      psi[parche] ~ dnorm(0, tau),
+      mu ~ dnorm(10, 5),
+      sigma ~ dexp(1),
+      tau ~ dexp(1)
+    ), data = dat, iter = 5e3, chains = 3, cores = 3, warmup = 500, log_lik = T)
+```
+
+```{r}
+precis(mod2.1, depth = 2)
+divergent(mod2.1)
+```
+
+
+El modelo tiene un un número tal de transiciones divergente que el *effective sampling size* de algunos parámetros es inferior a 1000 y por lo tanto no deberíamos estar muy confiados de esta estimación. Esto es común en modelos jerárquicos, y sucede porque el algoritmo explora incorrectamente algunas regiones del espacio de los parámetros. Podríamos intentar solucionarlo de varias formas: (i) incrementando el número de iteraciones (no es lo ideal porque no lidiaríamos con el problema de eficiencia en la exploración del algoritmo); (ii) incrementando la tasa de aceptación de valores que explora el algoritmo controlando
+los "saltos" entre uno y otro valor estimado (leapfrog step); (iii) reparametrización del modelo. Probemos la alternativa *ii* incrementando el `adapt_delta = 0.99`:
+
+```{r, warning=T, results='hide'}
+mod2.2 <- 
+  ulam(
+    alist(
+      superv ~ dbinom(n, p),
+      logit(p) <- alpha[nido] + psi[parche] + beta*prop_veg,
+      beta ~ dnorm(0.5, 1),
+      alpha[nido] ~ dnorm(mu, sigma),
+      psi[parche] ~ dnorm(0, tau),
+      mu ~ dnorm(10, 5),
+      sigma ~ dexp(1),
+      tau ~ dexp(1)
+    ), data = dat, iter = 5e3, chains = 3, cores = 3, warmup = 500, log_lik = T, 
+    control=list(adapt_delta=0.99))
+```
+
+```{r}
+precis(mod2.2, depth = 2)
+divergent(mod2.2)
+```
+
+Bien, tenemos menos transiciones divergentes, pero el *effective sampling size* continua bajo para algunos coeficientes. Probemos entonces reparametrizando el modelo, específicamente una reparametrización no centrada (non-centered reparametrization). Esta consiste en una estandarización que permite que el algoritmo explore el espacio de los parámetros de manera más eficiente. Veamos:
+
+```{r, warning=TRUE, results='hide'}
+mod2.3 <- 
+  ulam(
+    alist(
+      superv ~ dbinom(n, p),
+      logit(p) <- mu + z[nido] + sigma + # se incluyen en el modelo lineal
+                  x[parche] + tau + 
+                  beta*prop_veg,
+      z[nido] ~ dnorm(0, 1), # intercepto estandarizado del nido
+      x[parche] ~ dnorm(0, 1), # intercepto estandarizado del parche
+      beta ~ dnorm(0.5, 1),
+      mu ~ dnorm(10, 5),
+      sigma ~ dexp(1),
+      tau ~ dexp(1),
+      gq> vector[nido]:alpha <<- mu + z*sigma, # des-estanarización
+      gq> vector[parche]:psi <<- x*tau # des-estanarización
+    ), data = dat, chains = 3, cores = 3, iter = 5e3, warmup = 500, log_lik = T
+  )
+```
+
+```{r}
+divergent(mod2.3)
+round(precis(mod2.3, depth = 2)[-c(1:110),], 2)
+```
+Las transiciones divergentes persisten, pero ahora tenemos suficientes estimados de los parámetros estadísticamente independientes.
+
+Si comparamos los modelos también podemos verificar que el `mod2.3` (reparametrizado) tiene un mayor poder predictivo:
+```{r}
+compare(mod2.1, mod2.2, mod2.3)
+```
+
+Veamos ahora el ajuste a los datos del modelo reparametrizado (i.e. distribución predictiva posterior). Además, verifiquemos que podemos recobrar la distribución de probabilidad generadora de los datos ($Beta(3, 5)~+~\sigma,~\sigma \sim Normal(0, \phi)$)
+```{r}
+post <- extract.samples(mod2.3)
+
+est_p <- sapply(1:100, simplify = 'array', FUN = 
+                  function(i) {
+                    
+                    # equivalente a usar link(mod2.3, dat)
+                    
+                    i_alpha <- dat$nido[i]
+                    i_psi <- dat$parche[i]
+                    
+                    p <- 
+                      post$mu + post$z[, i_alpha, drop = T] + post$sigma +
+                      post$x[, i_psi, drop = T] + post$tau +
+                      (post$beta*dat$prop_veg[i])
+                    
+                    inv_logit(p)
+                    
+                  })
+
+
+est <- sapply(1:100, simplify = 'array', FUN = 
+                function(x) {
+                  i_alpha <- dat$nido[x]
+                  i_psi <- dat$parche[x]
+                  
+                  p <- 
+                    post$mu + post$z[, i_alpha, drop = T] + post$sigma +
+                    post$x[, i_psi, drop = T] + post$tau +
+                    (post$beta*dat$prop_veg[x])
+
+                  rbinom(1e3, size = dat$n[x], prob = inv_logit(p))
+                  # equivalente a sim(mod2.3, dat)
+                })
+
+par(mfrow = c(1, 2))
+
+plot(density(p + var_parche), ylim = c(0, 2.5), ylab = 'Densidad', 
+     xlab = expression(italic(P)['supervivencia']))
+for (i in 1:100) lines(density(est_p[i, ]), lwd = 0.1)
+
+plot(density(dat$superv), col = 'red', ylab = 'Densidad', 
+     xlab = expression(italic('Huevos sobrevivientes')), ylim = c(0, 0.18))
+for (i in 1:100) lines(density(est[i, ]), lwd = 0.2)
+lines(density(dat$superv), col = 'red', lwd = 2)
+
+par(mfrow = c(1, 1))
+```
+En efecto el modelo está adecuadamente definido. 
+
+Comparemos ahora las distribuciones posteriores por nido y parche 
+```{r}
+par(mfrow = c(1, 2))
+plot(NULL, xlim = c(0, 1), ylim = c(0, 4), ylab = 'Densidad', 
+     xlab = expression(italic(P)['nido']))
+for (i in 1:100) lines(density(inv_logit(post$z[, i])), lwd = 0.3)
+
+plot(NULL, xlim = c(0, 1), ylim = c(0, 4), ylab = 'Densidad', 
+     xlab = expression(italic(P)['parche']))
+for (i in 1:10) lines(density(inv_logit(post$x[, i])), lwd = 0.3)
+par(mfrow = c(1, 1))
+```
+La probabilidad de supervivencia de los huevos es notablemente más variable entre nidos. 
+
+Ya sabemos que la cobertura vegetal tiene un efecto positivo sobre la supervivencia de los huevos, nosotros la simulamos, pero veamos sus implicaciones para el modelo.
+```{r}
+v <- seq(0, 1, length.out = 100)
+
+b_veg <- sapply(1:100, simplify = 'array', FUN = 
+                  function(i) {
+                    inv_logit(post$beta*v[i])
+                  })
+
+ci_veg <- apply(b_veg, 2, quantile, c(0.025, 0.975))
+
+plot(v, apply(b_veg, 2, mean), type = 'l', xlab = 'Cobertura de vegetación (prop)', 
+     ylab = 'Probabilidad de supervivencia') 
+shade(ci_veg, v, col = col.alpha('cyan4'))
+
+```
+
+Graficamos el efecto neto de la cobertura vegetación, también podríamos estratificarlo por cada nido o parche de bosque.
+
+
+# Ejemplo
+
+Las simulaciones estocásticas nos permite plantear el modelo generador de los datos y estudiar el desempeño de un modelo estadístico, sus supuestos y alcances,  para recuperar dichos parámetros iniciales. Es sin duda ilustrativo. Ahora, apliquemos lo ya expuesto a un set de datos empírico. En este caso usaremos datos de un censo de fertilidad, específicamente el uso de anticonceptivos por mujeres bengalíes (Bangladesh) en 1988. Carguemos `rethinking::bangladesh` y exploremos las variables:
+
+```{r}
+data(bangladesh)
+d <- bangladesh
+
+d$district_id <- as.integer(as.factor(d$district))
+
+colnames(d)
+```
+
+`d` contiene 6 variables:
+
+:::{}
+- `woman`: identificador de la mujer.
+
+- `distric`: distrito al que pertenece.
+
+- `use.contraception`: uso (1) o no (0) de anticonceptivos.
+
+- `living.children`: número de hijos vivos.
+
+- `age.centered`: edad centrada.
+
+- `urban`: contexto urbano (1) o no urbano (0). En nuestro caso lo llamaremos rural.
+:::
+
+Nuestro objetivo será evaluar cómo el distrito, el contexto y la edad, modulan la probabilidad de que una mujer bengalí, en 1988, usara un método anticonceptivo. Definamos primero el modelo en notación matemática:
+
+$$
+\begin{align}
+&Uso~anticonceptivos \sim Binomial(1, P) \\
+&logit(P_i) = \alpha_{urbano_i} + \theta_{distrito_i} + \beta\times edad \\
+&\alpha_{urbano_i} \sim Normal(\mu, \sigma) \\
+&\theta_{distrito_i} \sim Normal(0, \phi) \\
+&\mu \sim Normal(0, 3) \\
+&\sigma \sim exponential(1) \\
+&\phi \sim exponential(1)\\
+&\beta \sim Normal(0.5, 0.2)
+\end{align}
+$$
+Detengámonos un momento en las probabilidades previas, y discutamos mi razonamiento para su elección. Los centros urbanos en general tienen un mayor acceso a establecimientos educativos y de salud. Sería razonable esperar que la probabilidad de usar anticonceptivos sea más baja en contextos rurales comparada con los urbanos. La previa $\mu \sim Normal(0, 3)$ implica justamente esto en la escala logit y de probabilidad, veamos:
+
+```{r}
+par(mfrow = c(1, 2))
+curve(dnorm(x, 0, 1.5), xlim = c(-5, 5), xlab = 'Log-odds(P)', ylab = 'Density')
+plot(density(inv_logit(rnorm(1e3, 0, 1.5))), xlab = 'P', ylab = 'Density', 
+     main = '')
+par(mfrow = c(1, 1))
+```
+
+Esta previa permite que el algoritmo explore, en escala logit, tanto valores negativos como positivos restringidos a $-3$ y $+3$. En probabilidades, implica todo el rango de probabilidades entre 0 y 1. 
+
+El contexto social, embebido en el espacial, probablemente modula la elección que hacen las mujeres. Esto es, más allá de vivir en un ambiente rural o urbano, variaciones en el sistema de creencias entre las comunidades en las que viven las mujeres, nos llevarían a esperar oscilaciones en la probabilidad de uso de anticonceptivos de acuerdo al distrito. La previa que hace justamente incorpora dicha variación eso $\theta_{distrito_i} \sim Normal(0, \phi)$. 
+
+Finalmente, con el tiempo llegan la experiencia, madurez, la introspección (**PONELE**). Sea por razones éticas, ambientales, filosóficas o simplemente cansancio, es razonable suponer que la probabilidad de usar métodos anticonceptivos es mayor en mujeres más adultas. Por lo tanto, empleamos $\beta \sim Normal(0.15, 0.2)$ una previa que permite al algoritmo explorar principalmente valores positivos de $\beta$, pero permaneciendo relativamente conservador. Veamos:
+
+```{r}
+betas_i <- rnorm(100, 0.15, 0.2)
+plot(NULL, xlim = c(-10, 10), ylim = c(0, 1), xlab = 'Edad', ylab = 'Probabilidad')
+for (i in 1:100) curve(inv_logit(0 + betas_i[i]*x), add = T, lwd = 0.1)
+curve(inv_logit(0 + mean(betas_i)*x), add = T, lwd = 2, col = 'red')
+```
+
+Una vez definidas las previas, agrupemos las variables en una lista y ajustemos el modelo:
+
+```{r, results='hide'}
+dat <- 
+  list(
+    anticonc = d$use.contraception,
+    urbano = as.integer(ifelse(d$urban == 1, 1, 2)),
+    distrito = d$district_id,
+    edad = d$age.centered
+  )
+
+me2 <- 
+  ulam(
+    alist(
+      anticonc ~ dbinom(1, p), 
+      logit(p) <- alpha[urbano] + theta[distrito] + beta*edad,
+      alpha[urbano] ~ dnorm(mu, sigma),
+      mu ~ dnorm(0, 3),
+      sigma ~ dexp(1),
+      theta[distrito] ~ dnorm(0, phi),
+      phi ~ dexp(1), 
+      beta ~ dnorm(0.15, 2)
+    ), data = dat, chains = 3, cores = 3, iter = 2e3, warmup = 500
+  )
+```
+
+```{r}
+precis(me2, depth = 2)
+```
+
+Todos los parámetros tienen más de mil estimados estadísticamente independientes y `Rhat ~ 1`. Podríamos ---más bien deberíamos, graficar las cadenas para corroborar que convergieron a la misma distribución posterior y exploraron el mismo espacio del parámetro. Pero, en este caso, confiaremos en la *salida* del modelo.
+
+Verifiquemos el ajuste del modelo a los datos:
+
+
+```{r}
+post2 <- extract.samples(me2)
+
+ppcheck <- sapply(1:length(dat$anticonc), simplify = 'array', FUN = 
+                    function(x) {
+                      urbano <- dat$urbano[x]
+                      distrito <- dat$distrito[x]
+                      edad <- dat$edad[x]
+                      
+                      p <- 
+                        post2$alpha[, urbano] + 
+                        post2$theta[, distrito] + 
+                        post2$beta*edad
+                      
+                      rbinom(1e3, 1, inv_logit(p))
+                      
+                    })
+
+plot(NULL, xlim = c(-0.3, 1.3), ylim = c(0, 2.8), 
+     xlab = 'Uso de anticonceptivo', ylab = 'Densidad')
+for (i in 1:200) lines(density(ppcheck[i, ]), lwd = 0.1)
+lines(density(dat$anticonc), col = 'red', lwd = 2)
+```
+
+El modelo es confiable. Grafiquemos ahora los efectos condicionales, y verifiquemos las implicaciones del distrito y el contexto espacial en la probabilidad de que las mujeres usen algún método anticonceptivo. Primero realicemos cálculos y un poco de carpintería:
+
+```{r}
+
+bar_urb <- unique(tibble(dist = dat$distrito,
+                         urb = dat$urbano))
+
+post_urb_dist <- sapply(1:nrow(bar_urb), simplify = 'array', FUN = 
+                          function(x) {
+                            post2$alpha[, bar_urb$urb[x], drop = T] +
+                              post2$theta[, bar_urb$dist[x], drop = T]
+                          })
+
+bar_urb$level <- ifelse(bar_urb$urb == 1, 'Urbano', 'Rural')
+
+post_urb_dist <- as_tibble(post_urb_dist)
+
+colnames(post_urb_dist) <- paste(bar_urb$level, bar_urb$dist, sep = '')
+
+post_urb_dist <- gather(post_urb_dist)
+post_urb_dist <- 
+  post_urb_dist |> 
+  group_by(key) |> 
+  transmute(li = quantile(value, 0.025), 
+            ls = quantile(value, 0.975),
+            mu = mean(value)) |> 
+  ungroup() |> 
+  unique()
+
+post_urb_dist$dist <- gsub('^([aA-zZ]*)([0-9]{1,})', '\\2', post_urb_dist$key)
+post_urb_dist$factor <- gsub('^([aA-zZ]*)([0-9]{1,})', '\\1', post_urb_dist$key)
+
+post_urb_dist[] <- lapply(post_urb_dist, function(x) if (is.double(x)) inv_logit(x) else(x))
+
+alpha_urb <- as_tibble(post2$alpha)
+
+colnames(alpha_urb) <- c('Urbano', 'Rural')
+
+contraste <- tibble(x = alpha_urb$Urbano - alpha_urb$Rural)
+
+alpha_urb <- gather(alpha_urb)
+
+```
+
+
+Ahora el gráfico
+
+```{r, fig.height= 10}
+plot_contraste <- 
+  ggplot(contraste, aes(x)) +
+  geom_density(fill = 'seagreen', color = 'seagreen', alpha = 0.5) +
+  labs(x = quote(italic(P['(Diferencia urbano-rural)'])), y = 'Densidad') +
+  geom_vline(xintercept = mean(contraste$x), linetype = 3) +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        text = element_text(family = 'Times New Roman'))
+
+plot_cond <- 
+  post_urb_dist |> 
+  ggplot(aes(xmin = li, xmax = ls, x = mu, 
+             y = fct_reorder(dist, mu, .desc = T), color = factor)) +
+  geom_point(position = position_dodge(width = 0.3)) +
+  geom_linerange(position = position_dodge(width = 0.3)) +
+  labs(x = quote(italic(P['(usar anticonceptivos)'])), y = 'Distrito') +
+  theme_bw() +
+  theme(panel.grid = element_blank(), 
+        legend.title = element_blank(), 
+        legend.position = 'top',
+        text = element_text(family = 'Times New Roman'))
+
+plot_contraste + 
+  plot_cond + 
+  plot_layout(ncol = 2)
+
+```
+Concluimos que las mujeres en zonas urbanas tienen, en general, un 60% más de probabilidad de usar anticonceptivos comparadas con mujeres en ambientes rurales (figura izquierda). Pero también observamos que, además del contexto espacial, dicha probabilidad está fuertemente influenciada por el distrito (figura derecha).
+
+
+Ahora veamos cómo se relaciona esta probabilidad con la edad de las mujeres:
+
+```{r}
+
+v_age <- seq(min(dat$edad), max(dat$edad), length.out = 100)
+
+sim_edad <- sapply(v_age, simplify = 'array', FUN = 
+                     function(x) {
+                       inv_logit(post2$beta*x)
+                     })
+
+sim_edad <- 
+  as_tibble(
+    do.call('rbind', 
+            apply(sim_edad, 2, simplify = 'list', FUN = 
+                    function(x) {
+                      tibble(li = quantile(x, 0.025),
+                             ls = quantile(x, 0.975), 
+                             mu = mean(x))
+                    }))
+  )
+
+sim_edad$x <- v_age
+
+sim_edad |> 
+  ggplot(aes(x = x, y = mu, ymin = li, ymax = ls)) +
+  geom_ribbon(alpha = 0.5, fill = 'cyan4') +
+  geom_line(color = 'tan1', linewidth = 1.5) +
+  labs(x = 'Edad (std)', y = quote(P['(usar anticonceptivos)'])) +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        text = element_text(family = 'Times New Roman'))
+
+```
+
+En efecto, la edad incrementa la probabilidad de que las mujeres usen un método anticonceptivo.
+
+Podría dedicar una sección a discutir las implicaciones de los resultados para una intervención, distrito específica, para fomentar el uso de anticonceptivos en mujeres bengalíes allá en 1988, pero no es el objetivo del ejercicio. Eso se lo dejo a quién sea que haya llegado hasta acá.
+
+```{r}
+sessionInfo()
+```
+

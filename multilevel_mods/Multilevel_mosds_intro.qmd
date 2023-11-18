@@ -1,5 +1,5 @@
 ---
-title: "Introduccion modelos jerarquicos (I)"
+title: "Introduccion modelos jerárquicos (I)"
 format: 
   html:
     theme: 
@@ -38,7 +38,7 @@ Los modelos jerárquicos (mixtos o multinivel), corresponden a un grupo de model
 
 Modelemos la probabilidad de supervivencia de huevos en 50 nidadas de una ave cualquiera en un parche de bosque. Tenemos tres alternativas:
 
-:::{}
+<div>
 
 i.  Modelar los datos asumiendo que todos los nidos tienen igual probabilidad $p$ de ser depredados (**pooling**), y por lo tanto estimando un único parámetro común para todos. Esto es, asumimos que la variación entre nidos es cero.
 
@@ -46,7 +46,7 @@ ii. Estimar de manera independiente el coeficiente $p$ para cada nido (**no pool
 
 iii. Estimar $p$ para cada nido, pero asumiendo que cada $p_i$ hace parte de una distribución de probabilidad $Binomial(p)$ de la población de nidos (**partial pooling**).
 
-:::
+</div>
 
 Simulemos los datos
 
@@ -264,7 +264,7 @@ dat <-
   )
 ```
 
-\\ 
+\\
 
 $$
 \begin{align}
@@ -356,9 +356,7 @@ De hecho, el modelo fue capaz de recuperar la distribución de probabilidad gene
 
 Podríamos concluir (ponele...), que los factores que determinan la probabilidad de supervivencia de huevos en nidos del ave `X` operan principalmente a escala local ---la principal variación proviene del `nido`, mientras que el aporte del `parche` es tangencial. **Supongamos que la investigadora alcanzó la misma conclusión y, en un intento de identificar dichos factores locales moduladores de la supervivencia, decidió medir la proporción de cobertura vegetal en un radio de 1 m alrededor de cada nido. Veamos:**
 
-
-
-# Transisiones divergentes y reparametrización 
+# Transiciones divergentes y reparametrización
 
 De nuevo simulemos los datos y definamos el modelo.
 
@@ -433,6 +431,7 @@ $$
 &\sigma_j \sim exponential(1) \\ 
 \end{align}
 $$
+
 ```{r, warning=T, results='hide'}
 mod2.1 <- 
   ulam(
@@ -453,9 +452,7 @@ precis(mod2.1, depth = 2)
 divergent(mod2.1)
 ```
 
-
-El modelo tiene un un número tal de transiciones divergente que el *effective sampling size* de algunos parámetros es inferior a 1000 y por lo tanto no deberíamos estar muy confiados de esta estimación. Esto es común en modelos jerárquicos, y sucede porque el algoritmo explora incorrectamente algunas regiones del espacio de los parámetros. Podríamos intentar solucionarlo de varias formas: (i) incrementando el número de iteraciones (no es lo ideal porque no lidiaríamos con el problema de eficiencia en la exploración del algoritmo); (ii) incrementando la tasa de aceptación de valores que explora el algoritmo controlando
-los "saltos" entre uno y otro valor estimado (leapfrog step); (iii) reparametrización del modelo. Probemos la alternativa *ii* incrementando el `adapt_delta = 0.99`:
+El modelo tiene un un número tal de transiciones divergente que el *effective sampling size* de algunos parámetros es inferior a 1000 y por lo tanto no deberíamos estar muy confiados de esta estimación. Esto es común en modelos jerárquicos, y sucede porque el algoritmo explora incorrectamente algunas regiones del espacio de los parámetros. Podríamos intentar solucionarlo de varias formas: (i) incrementando el número de iteraciones (no es lo ideal porque no lidiaríamos con el problema de eficiencia en la exploración del algoritmo); (ii) incrementando la tasa de aceptación de valores que explora el algoritmo controlando los "saltos" entre uno y otro valor estimado (leapfrog step); (iii) reparametrización del modelo. Probemos la alternativa *ii* incrementando el `adapt_delta = 0.99`:
 
 ```{r, warning=T, results='hide'}
 mod2.2 <- 
@@ -504,14 +501,17 @@ mod2.3 <-
 divergent(mod2.3)
 round(precis(mod2.3, depth = 2)[-c(1:110),], 2)
 ```
+
 Las transiciones divergentes persisten, pero ahora tenemos suficientes estimados de los parámetros estadísticamente independientes.
 
 Si comparamos los modelos también podemos verificar que el `mod2.3` (reparametrizado) tiene un mayor poder predictivo:
+
 ```{r}
 compare(mod2.1, mod2.2, mod2.3)
 ```
 
 Veamos ahora el ajuste a los datos del modelo reparametrizado (i.e. distribución predictiva posterior). Además, verifiquemos que podemos recobrar la distribución de probabilidad generadora de los datos ($Beta(3, 5)~+~\sigma,~\sigma \sim Normal(0, \phi)$)
+
 ```{r}
 post <- extract.samples(mod2.3)
 
@@ -560,9 +560,11 @@ lines(density(dat$superv), col = 'red', lwd = 2)
 
 par(mfrow = c(1, 1))
 ```
-En efecto el modelo está adecuadamente definido. 
 
-Comparemos ahora las distribuciones posteriores por nido y parche 
+En efecto el modelo está adecuadamente definido.
+
+Comparemos ahora las distribuciones posteriores por nido y parche
+
 ```{r}
 par(mfrow = c(1, 2))
 plot(NULL, xlim = c(0, 1), ylim = c(0, 4), ylab = 'Densidad', 
@@ -574,9 +576,11 @@ plot(NULL, xlim = c(0, 1), ylim = c(0, 4), ylab = 'Densidad',
 for (i in 1:10) lines(density(inv_logit(post$x[, i])), lwd = 0.3)
 par(mfrow = c(1, 1))
 ```
-La probabilidad de supervivencia de los huevos es notablemente más variable entre nidos. 
+
+La probabilidad de supervivencia de los huevos es notablemente más variable entre nidos.
 
 Ya sabemos que la cobertura vegetal tiene un efecto positivo sobre la supervivencia de los huevos, nosotros la simulamos, pero veamos sus implicaciones para el modelo.
+
 ```{r}
 v <- seq(0, 1, length.out = 100)
 
@@ -595,10 +599,9 @@ shade(ci_veg, v, col = col.alpha('cyan4'))
 
 Graficamos el efecto neto de la cobertura vegetación, también podríamos estratificarlo por cada nido o parche de bosque.
 
-
 # Ejemplo
 
-Las simulaciones estocásticas nos permite plantear el modelo generador de los datos y estudiar el desempeño de un modelo estadístico, sus supuestos y alcances,  para recuperar dichos parámetros iniciales. Es sin duda ilustrativo. Ahora, apliquemos lo ya expuesto a un set de datos empírico. En este caso usaremos datos de un censo de fertilidad, específicamente el uso de anticonceptivos por mujeres bengalíes (Bangladesh) en 1988. Carguemos `rethinking::bangladesh` y exploremos las variables:
+Las simulaciones estocásticas nos permite plantear el modelo generador de los datos y estudiar el desempeño de un modelo estadístico, sus supuestos y alcances, para recuperar dichos parámetros iniciales. Es sin duda ilustrativo. Ahora, apliquemos lo ya expuesto a un set de datos empírico. En este caso usaremos datos de un censo de fertilidad, específicamente el uso de anticonceptivos por mujeres bengalíes (Bangladesh) en 1988. Carguemos `rethinking::bangladesh` y exploremos las variables:
 
 ```{r}
 data(bangladesh)
@@ -611,19 +614,21 @@ colnames(d)
 
 `d` contiene 6 variables:
 
-:::{}
-- `woman`: identificador de la mujer.
+<div>
 
-- `distric`: distrito al que pertenece.
+-   `woman`: identificador de la mujer.
 
-- `use.contraception`: uso (1) o no (0) de anticonceptivos.
+-   `distric`: distrito al que pertenece.
 
-- `living.children`: número de hijos vivos.
+-   `use.contraception`: uso (1) o no (0) de anticonceptivos.
 
-- `age.centered`: edad centrada.
+-   `living.children`: número de hijos vivos.
 
-- `urban`: contexto urbano (1) o no urbano (0). En nuestro caso lo llamaremos rural.
-:::
+-   `age.centered`: edad centrada.
+
+-   `urban`: contexto urbano (1) o no urbano (0). En nuestro caso lo llamaremos rural.
+
+</div>
 
 Nuestro objetivo será evaluar cómo el distrito, el contexto y la edad, modulan la probabilidad de que una mujer bengalí, en 1988, usara un método anticonceptivo. Definamos primero el modelo en notación matemática:
 
@@ -638,8 +643,7 @@ $$
 &\phi \sim exponential(1)\\
 &\beta \sim Normal(0.5, 0.2)
 \end{align}
-$$
-Detengámonos un momento en las probabilidades previas, y discutamos mi razonamiento para su elección. Los centros urbanos en general tienen un mayor acceso a establecimientos educativos y de salud. Sería razonable esperar que la probabilidad de usar anticonceptivos sea más baja en contextos rurales comparada con los urbanos. La previa $\mu \sim Normal(0, 3)$ implica justamente esto en la escala logit y de probabilidad, veamos:
+$$ Detengámonos un momento en las probabilidades previas, y discutamos mi razonamiento para su elección. Los centros urbanos en general tienen un mayor acceso a establecimientos educativos y de salud. Sería razonable esperar que la probabilidad de usar anticonceptivos sea más baja en contextos rurales comparada con los urbanos. La previa $\mu \sim Normal(0, 3)$ implica justamente esto en la escala logit y de probabilidad, veamos:
 
 ```{r}
 par(mfrow = c(1, 2))
@@ -649,9 +653,9 @@ plot(density(inv_logit(rnorm(1e3, 0, 1.5))), xlab = 'P', ylab = 'Density',
 par(mfrow = c(1, 1))
 ```
 
-Esta previa permite que el algoritmo explore, en escala logit, tanto valores negativos como positivos restringidos a $-3$ y $+3$. En probabilidades, implica todo el rango de probabilidades entre 0 y 1. 
+Esta previa permite que el algoritmo explore, en escala logit, tanto valores negativos como positivos restringidos a $-3$ y $+3$. En probabilidades, implica todo el rango de probabilidades entre 0 y 1.
 
-El contexto social, embebido en el espacial, probablemente modula la elección que hacen las mujeres. Esto es, más allá de vivir en un ambiente rural o urbano, variaciones en el sistema de creencias entre las comunidades en las que viven las mujeres, nos llevarían a esperar oscilaciones en la probabilidad de uso de anticonceptivos de acuerdo al distrito. La previa que hace justamente incorpora dicha variación eso $\theta_{distrito_i} \sim Normal(0, \phi)$. 
+El contexto social, embebido en el espacial, probablemente modula la elección que hacen las mujeres. Esto es, más allá de vivir en un ambiente rural o urbano, variaciones en el sistema de creencias entre las comunidades en las que viven las mujeres, nos llevarían a esperar oscilaciones en la probabilidad de uso de anticonceptivos de acuerdo al distrito. La previa que hace justamente incorpora dicha variación eso $\theta_{distrito_i} \sim Normal(0, \phi)$.
 
 Finalmente, con el tiempo llegan la experiencia, madurez, la introspección (**PONELE**). Sea por razones éticas, ambientales, filosóficas o simplemente cansancio, es razonable suponer que la probabilidad de usar métodos anticonceptivos es mayor en mujeres más adultas. Por lo tanto, empleamos $\beta \sim Normal(0.15, 0.2)$ una previa que permite al algoritmo explorar principalmente valores positivos de $\beta$, pero permaneciendo relativamente conservador. Veamos:
 
@@ -695,7 +699,6 @@ precis(me2, depth = 2)
 Todos los parámetros tienen más de mil estimados estadísticamente independientes y `Rhat ~ 1`. Podríamos ---más bien deberíamos, graficar las cadenas para corroborar que convergieron a la misma distribución posterior y exploraron el mismo espacio del parámetro. Pero, en este caso, confiaremos en la *salida* del modelo.
 
 Verifiquemos el ajuste del modelo a los datos:
-
 
 ```{r}
 post2 <- extract.samples(me2)
@@ -765,7 +768,6 @@ alpha_urb <- gather(alpha_urb)
 
 ```
 
-
 Ahora el gráfico
 
 ```{r, fig.height= 10}
@@ -796,8 +798,8 @@ plot_contraste +
   plot_layout(ncol = 2)
 
 ```
-Concluimos que las mujeres en zonas urbanas tienen, en general, un 60% más de probabilidad de usar anticonceptivos comparadas con mujeres en ambientes rurales (figura izquierda). Pero también observamos que, además del contexto espacial, dicha probabilidad está fuertemente influenciada por el distrito (figura derecha).
 
+Concluimos que las mujeres en zonas urbanas tienen, en general, un 60% más de probabilidad de usar anticonceptivos comparadas con mujeres en ambientes rurales (figura izquierda). Pero también observamos que, además del contexto espacial, dicha probabilidad está fuertemente influenciada por el distrito (figura derecha).
 
 Ahora veamos cómo se relaciona esta probabilidad con la edad de las mujeres:
 
@@ -841,4 +843,3 @@ Podría dedicar una sección a discutir las implicaciones de los resultados para
 ```{r}
 sessionInfo()
 ```
-

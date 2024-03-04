@@ -27,8 +27,7 @@ code-copy: true
 
 knitr::opts_chunk$set(echo = TRUE, warning = F, message = F)
 
-paquetes <- c("rethinking", "tidyverse", "magrittr", "cmdstanr", 'rstan', 
-              'patchwork')
+paquetes <- c("rethinking", "tidyverse", "magrittr", "cmdstanr", 'patchwork')
 sapply(paquetes, library, character.only = T)
 
 ```
@@ -120,7 +119,8 @@ dat <-
   list(
     obs = d$RODENTSP,
     edad = d$AGE,
-    vege = d$PERSHRUB
+    vege = d$PERSHRUB,
+    N = nrow(d)
   )
 
 ```
@@ -150,27 +150,97 @@ par(mfrow = c(1, 1))
 ```
 En efecto, esperamos una relación positiva, pero las previas son lo suficientemente amplias como para esperar relaciones inversas. Ajustemos el modelo:
 
+```{r, eval=FALSE}
+cat(file = 'binom1.stan', 
+    '
+    data{
+      int N;
+      array[N] int obs;
+      array[N] int edad;
+      array[N] int vege;
+    }
+    
+    parameters {
+      real alpha;
+      real beta;
+      real tau;
+    }
+    
+    model{
+      vector[N] p;
+      
+      for (i in 1:N) {
+          p[i] = alpha + beta*edad[i] + tau*vege[i];
+          p[i] = inv_logit(p[i]);
+      }
+    
+      obs ~ binomial(1, p);  
+    
+      alpha ~ normal(0, 1.5);
+      beta ~ normal(0.5, 1);
+      tau ~ normal(0.5, 1);
+    }
+    
+    ')
+```
 
-```{r}
-m <- 
-  ulam(
-    alist(
-      obs ~ dbinom(1, p),
-      logit(p) <- alpha + beta*edad + tau*vege,
-      alpha ~ dnorm(0, 1.5),
-      beta ~ dnorm(0.5, 1),
-      tau ~ dnorm(0.5, 1)
-    ), data = dat, chains = 3, warmup = 500, iter = 2e3, cores = 3
+
+```{r, warning=F, message=F}
+
+
+(file <- paste(getwd(), '/binom1.stan', sep = ''))
+file
+fit_m <- cmdstan_model(file, compile = T)
+
+m <-
+  fit_m$sample(
+    data = dat,
+    iter_sampling = 2e3,
+    iter_warmup = 500,
+    thin = 3,
+    chains = 3,
+    parallel_chains = 3,
+    refresh = 500,
+    seed = 123
   )
 
-precis(m)
+trace_plot <- function(fit, par, n_chains) {
+  
+  d <- as_mcmc.list(fit)
+  
+  d <- lapply(d, FUN = 
+                function(x) {
+                  x <- as.data.frame(unclass(as.matrix(x)))
+                  x$iter <- 1:nrow(x)
+                  x
+                })
+  
+  for (i in 1:n_chains) d[[i]]$chain <- i
+  
+  plot(d[[1]][, 'iter', drop = T], d[[1]][, par, drop = T], 
+       type = 'l', col = 1, main = '', ylab = par, 
+       xlab = 'Iteration')
+  for (i in 2:n_chains) {
+    lines(d[[i]][, 'iter', drop = T], d[[i]][, par, drop = T], 
+          col = i, main = '', ylab = par, 
+          xlab = 'Iteration')
+  }
+  
+}
+
+(m_out <- m$summary())
+
+par(mfrow = c(2, 2), mar = c(4, 4, 1, 1))
+for (i in 1:4) trace_plot(m, m_out$variable[i], 3)
+par(mfrow = c(1, 1))  
+
 ```
 No soy fanático de interpretar modelos con tablas de coeficientes. Por ahora, corroboremos que, para cada parámetro, el número de estimados estadísticamente independientes supera los 1000 y las cadenas convergieron a la "misma" distribución posterior (`Rhat ~ 1`). Todo en orden
 
 
 Grafiquemos las distribuciones predictivas posteriores y veamos la calidad del ajuste del modelo a los datos.
 ```{r}
-post <- extract.samples(m)
+post <- m$draws(format = 'df')
 
 ppcheck <- sapply(1:length(dat$obs), simplify = 'array', FUN = 
                     function(x) {
@@ -333,49 +403,78 @@ sum(rnorm(1e6, 7, 5) < 0) / 1e6
 
 Notemos que la previa implicaría que cerca del 8% de de nuestras observaciones (conteos de gatos) puedan adquirir valores negativos, no una muy buena elección. Pero sigamos. Ajustemos los modelos:
 
-```{r}
-mod_norm <- 
-  ulam(
-    alist(
-      gatos ~ dnorm(mu, sigma), # función de likelihood normal
-      mu <- alpha[barrio],
-      alpha[barrio] ~ dnorm(7, 5),
-      sigma ~ dexp(1)
-    ), data = list(gatos = barrios$value, 
-                   barrio = barrios$key),
-    chains = 3, iter = 2e3, cores = 3
-  ) 
+```{r, eval=FALSE}
+cat(file = 'binom2.stan',
+    '
+    data{
+      int N;
+      int N_barrio;
+      array[N] int barrio;
+      array[N] int gatos_norm;
+      array[N] int gatos_pois;
+    }
+    
+    parameters{
+      vector[N_barrio] alpha_norm;
+      real<lower = 0> sigma;
+      vector[N_barrio] alpha_pois;
+    }
+    
+    model{
+      target += normal_lpdf(gatos_norm | alpha_norm[barrio], sigma);
+      target += normal_lpdf(alpha_norm | 7, 5);
+      target += exponential_lpdf(sigma | 1);
+    
+      target += poisson_lpmf(gatos_pois | exp(alpha_pois[barrio]));
+      target += normal_lpdf(alpha_pois | 7, 5);
+    }
+    ')
+```
 
-pois_mod <- 
-  ulam(
-    alist(
-      gatos ~ dpois(lambda), # funcion de likelihood Poisson
-      log(lambda) <- alpha[barrio],
-      alpha[barrio] ~ dnorm(7, 5)
-    ), data = list(gatos = barrios$value, 
-                   barrio = barrios$key),
-    chains = 3, iter = 2e3, cores = 3
+
+```{r, warning=FALSE, message=FALSE}
+
+(file <- paste(getwd(), '/binom2.stan', sep = ''))
+
+fit_norm <- cmdstan_model(file, compile = T)
+
+mod <- 
+  fit_norm$sample(
+    data = list(gatos_norm = barrios$value,
+                gatos_pois = barrios$value,
+                barrio = barrios$key, 
+                N = nrow(barrios), 
+                N_barrio = length(unique(barrios$key))),
+    iter_sampling = 2e3,
+    iter_warmup = 500, 
+    thin = 3, 
+    chains = 3, 
+    parallel_chains = 3,
+    refresh = 500, 
+    seed = 123
   )
 
+(mod_out <- mod$summary())
+
+par(mfrow = c(3, 4))
+for (i in 1:10) trace_plot(mod, mod_out$variable[i], 3)
+par(mfrow = c(1, 1))
+
+
 ```
 
-Salida del modelo normal:
+Salida de los modelos:
+
 
 ```{r}
-precis(mod_norm, depth = 2)
-```
-
-Salida modelo Poisson:
-
-```{r}
-exp(precis(pois_mod, depth = 2)[, 1, drop = F])
+(mod_out <- mod$summary())
 ```
 
 En principio parece que ambos modelos estiman de manera similar los gatos observados promedio. Sin embargo, grafiquemos las distribuciones predictivas posteriores.
 
 ```{r}
 
-post_pois <- as_tibble(extract.samples(pois_mod)$alpha)
+post_pois <- mod$draws(format = 'df')[, 7:10]
 
 post_pois <- apply(post_pois, 2, FUN = 
                      function(x) {
@@ -384,7 +483,7 @@ post_pois <- apply(post_pois, 2, FUN =
                              exp(x))
                      })
 
-post_norm <- as_tibble(do.call('cbind', extract.samples(mod_norm)))
+post_norm <- mod$draws(format = 'df')[, 2:6]
 
 post_norm <- apply(post_norm[, -5], 2, FUN = 
                      function(x) {

@@ -27,7 +27,8 @@ code-copy: true
 
 knitr::opts_chunk$set(echo = TRUE, warning = F, message = F)
 
-paquetes <- c("rethinking", "tidyverse", "magrittr", 'patchwork', 'rstan')
+paquetes <- c("rethinking", "tidyverse", "magrittr", 'patchwork', 'rstan',
+              'cmdstanr', 'loo')
 sapply(paquetes, library, character.only = T)
 
 ```
@@ -61,53 +62,234 @@ y <- rbinom(n, huevos, p) # huevos totales
 
 dat <- list(surv = y,
             huevos = huevos,
-            nido = 1:n)
+            nido = 1:n, 
+            N = n)
 ```
 
 Ajustemos el modelo *pooling*.
 
+```{r, eval=FALSE}
+cat(file = 'multilevel_mods/pooling.stan', 
+    '
+    data{
+      int N;
+      array[N] int surv;
+      array[N] int huevos;
+    }
+    
+    parameters{
+      real alpha;
+    }
+    
+    model{
+      real p;
+      alpha ~ normal(5, 2.5);
+      p = alpha;
+      p = inv_logit(p);
+      surv ~ binomial(huevos, p);
+    }
+    
+    generated quantities{
+      vector[N] log_lik;
+      real p;
+      p = alpha;
+      p = inv_logit(p);
+      for (i in 1:N) log_lik[i] = binomial_lpmf(surv[i] | huevos[i], p);
+    }
+    '
+    )
+```
+
+
 ```{r, results='hide'}
+
+file <- paste(getwd(), '/pooling.stan', sep = '')
+fit_pooling <- cmdstan_model(file, compile = T)
+
 pooling <- 
-  ulam(
-    alist(
-      surv ~ dbinom(huevos, p),
-      logit(p) <- alpha,
-      alpha ~ dnorm(5, 2.5) # previa para los nidos 
-    ), data = dat, chains = 3, cores = 3, iter = 2e3, warmup = 500,
-    log_lik = T
+  fit_pooling$sample(
+    data = dat,
+    iter_sampling = 2e3,
+    iter_warmup = 500,
+    chains = 3,
+    parallel_chains = 3, 
+    thin = 3,
+    refresh = 500,
+    seed = 123
   )
+
+trace_plot <- function(fit, par, n_chains) {
+  
+  d <- as_mcmc.list(fit)
+  
+  d <- lapply(d, FUN = 
+                function(x) {
+                  x <- as.data.frame(unclass(as.matrix(x)))
+                  x$iter <- 1:nrow(x)
+                  x
+                })
+  
+  for (i in 1:n_chains) d[[i]]$chain <- i
+  
+  plot(d[[1]][, 'iter', drop = T], d[[1]][, par, drop = T], 
+       type = 'l', col = 1, main = '', ylab = par, 
+       xlab = 'Iteration')
+  for (i in 2:n_chains) {
+    lines(d[[i]][, 'iter', drop = T], d[[i]][, par, drop = T], 
+          col = i, main = '', ylab = par, 
+          xlab = 'Iteration')
+  }
+  
+}
+
+(out_pooling <- pooling$summary())
+
+par(mfrow = c(1, 2), mar = c(4, 4, 1, 1))
+for (i in 1:2) trace_plot(pooling, out_pooling$variable[i], 3)
+par(mfrow = c(1, 1))
 
 ```
 
 Modelo *no pooling*
 
+```{r, eval=FALSE}
+cat(file = 'multilevel_mods/no_pooling.stan',
+    '
+    data{
+      int N;
+      array[N] int surv;
+      array[N] int huevos;
+      array[N] int nido;
+    }
+    
+    parameters{
+      vector[N] alpha;
+    }
+    
+    model {
+      vector[N] p;
+      alpha ~ normal(5, 25); // previa para cada nido
+    
+      for (i in 1:N) {
+        p[i] = alpha[nido[i]]; // estimación estratificada por nido
+        p[i] = inv_logit(p[i]);
+      }
+    surv ~ binomial(huevos, p);
+      
+    }
+    
+    generated quantities{
+      vector[N] log_lik;
+      vector[N] p;
+      
+      for (i in 1:N) {
+        p[i] = alpha[nido[i]];
+        p[i] = inv_logit(p[i]);
+      }
+      
+      for (i in 1:N) log_lik[i] = binomial_lpmf(surv[i] | huevos[i], p[i]);
+    }
+    ')
+```
+
+
 ```{r, results='hide'}
+
+file <- paste(getwd(), '/no_pooling.stan', sep = '')
+
+fit_no_pooling <- cmdstan_model(file, compile = T)
+
 no_pooling <- 
-  ulam(
-    alist(
-      surv ~ dbinom(huevos, p),
-      logit(p) <- alpha[nido], # Estratificación por nido
-      alpha[nido] ~ dnorm(5, 2.5) # probabilidad independiente para cada nido
-    ), data = dat, chains = 3, cores = 3, iter = 2e3, warmup = 500,
-    log_lik = T
+  fit_no_pooling$sample(
+    data = dat,
+    iter_sampling = 2e3,
+    iter_warmup = 500, 
+    chains = 3, 
+    parallel_chains = 3, 
+    thin = 3, 
+    refresh = 500, 
+    seed = 123
   )
+
+(out_no_pooling <- no_pooling$summary())
+
+par(mfrow = c(3, 3))
+for (i in 1:9) trace_plot(no_pooling, out_no_pooling$variable[i], 3)
+par(mfrow = c(1, 1))
 
 ```
 
 Modelo *partial pooling*
 
+```{r, eval=FALSE}
+cat(file = 'multilevel_mods/par_pooling.stan',
+    '
+    data{
+      int N;
+      array[N] int surv;
+      array[N] int huevos;
+      array[N] int nido;
+    }
+    
+    parameters{
+      vector[N] alpha;
+      real mu;
+      real<lower = 0> sigma;
+    }
+    
+    model{
+      vector[N] p;
+      alpha ~ normal(mu, sigma); // previa para la población de nidos (previa adaptativa)
+      mu ~ normal(5, 2.5); // Hiper previa (previa de la previa)
+      sigma ~ exponential(1); // Hiper previa (previa de la previa)
+    
+      for (i in 1:N) {
+        p[i] = alpha[nido[i]]; // modelo estratificado por nido
+        p[i] = inv_logit(p[i]);
+      }
+    
+    surv ~ binomial(huevos, p);
+    
+    }
+    
+    generated quantities{
+      vector[N] log_lik;
+      vector[N] p;
+      
+      for (i in 1:N) {
+        p[i] = alpha[nido[i]];
+        p[i] = inv_logit(p[i]);
+      }
+    
+      for (i in 1:N) log_lik[i] = binomial_lpmf(surv[i] | huevos[i], p[i]);
+    }
+    
+    ')
+```
+
+
 ```{r, results='hide'}
+
+file <- paste(getwd(), '/par_pooling.stan', sep = '')
+fit_par_pooling <- cmdstan_model(file, compile = T)
+
 par_pool <- 
-  ulam(
-    alist(
-      surv ~ dbinom(huevos, p),
-      logit(p) <- alpha[nido],
-      alpha[nido] ~ dnorm(mu, sigma), # previa de la población de nidos (previa adaptable) (hiper parámetros)
-      mu ~ dnorm(5, 2.5), # previa del nido promedio (hiper previa)
-      sigma ~ dexp(1) # (hiper previa)
-    ), data = dat, chains = 3, cores = 3, iter = 5e3, warmup = 1e3,
-    log_lik = T
+  fit_par_pooling$sample(
+    data = dat,
+    iter_sampling = 2e3,
+    iter_warmup = 500,
+    chains = 3, 
+    parallel_chains = 3, 
+    thin = 3, 
+    refresh = 500,
+    seed = 123
   )
+
+(out_par_pool <- par_pool$summary())
+
+par(mfrow = c(3, 3))
+for (i in 1:9) trace_plot(par_pool, out_par_pool$variable[i], 3)
+par(mfrow = c(1, 1))
 
 ```
 
@@ -123,28 +305,30 @@ $$
 \end{align}
 $$ $\mu_j$ y $\sigma_j$ se conocen como *hiperparámetros* porque son parámetros de parámetros (la previa poblacional), por la misma razón $Normal(5, 2.5)$ y $exponential(1)$ se les llama *hiper-previas*.
 
-Usemos el `WAIC` para comparar los tres modelos en términos de su capacidad predictiva fuera de la muestra:
+Usemos el `looic` para comparar los tres modelos en términos de su capacidad predictiva fuera de la muestra:
 
 ```{r}
-compare(par_pool, no_pooling, pooling)
+loo_compare(pooling$loo(), no_pooling$loo(), par_pool$loo())
 ```
 
-El WAI del modelo jerárquico es notablemente más bajo comparado con los modelos *pooling* y *no pooling* (i.e. tiene un mayor poder predictivo). Veamos qué tan precisa es la estimación del log-odds de los modelos jerárquico y *pooling*:
+El looic del modelo jerárquico es notablemente más bajo comparado con los modelos *pooling* y *no pooling* (i.e. tiene un mayor poder predictivo). Veamos qué tan precisa es la estimación del log-odds de los modelos jerárquico y *pooling*:
 
 ```{r}
-log_odds_P <- extract.samples(no_pooling)
-log_odds_parP <- extract.samples(par_pool)
+log_odds_P <- no_pooling$draws(format = 'df')
+log_odds_P <- log_odds_P[, grepl('alpha', colnames(log_odds_P))]
+log_odds_parP <- par_pool$draws(format = 'df')
 
 plot(NULL, xlim = c(-5, 5), ylim = c(0, 1.2), xlab = 'log-odds nidos', 
      ylab = 'Densidad')
 for (i in 1:500) {
   curve(dnorm(x, log_odds_parP$mu[i], log_odds_parP$sigma[i]), 
         lwd = 0.1, add = T, col = "red")
-  lines(density(log_odds_P$alpha[i, ]), lwd = 0.1, col = 'tan1')
+  lines(density(as.matrix(log_odds_P[i, ])), lwd = 0.1, col = 'tan1')
 }
+
 curve(dnorm(x, mean(log_odds_parP$mu), mean(log_odds_parP$sigma)), add = T,
       col = 'red', lwd = 2.5)
-lines(density(apply(log_odds_P$alpha, 2, mean)), col = 'tan1', lwd = 2.5) 
+lines(density(apply(log_odds_P, 2, mean)), col = 'tan1', lwd = 2.5) 
 lines(density(logit(rbeta(1e3, 3, 5))), col = 'black', lwd = 2.5)
 ```
 
@@ -153,24 +337,24 @@ Ambos modelos predicen bien el promedio del log-odd real (negro). Sin embargo, n
 Ahora comparemos el error de la probabilidad de supervivencia estimada por ambos modelos, con la probabilidad "real" --- la simulada a partir de $Beta(\phi_1 = 3, \phi_2= 5)$.
 
 ```{r}
-post_parPool <- extract.samples(par_pool)
-post_parPool <- as_tibble(post_parPool$alpha)
+post_parPool <- par_pool$draws(format = 'df')
+post_parPool <- as_tibble(post_parPool[, grepl('alpha', colnames(post_parPool))])
 colnames(post_parPool) <- paste('nido', 1:n, sep = '')
 post_parPool <- do.call('rbind', apply(post_parPool, 2, simplify = 'list', FUN = 
-                                        function(x) {
-                                          tibble(li = quantile(x, 0.025),
-                                                 ls = quantile(x, 0.975),
-                                                 mu = mean(x),
-                                                 mod = 'Par pooling')
-                                        }))
+                                         function(x) {
+                                           tibble(li = quantile(x, 0.025),
+                                                  ls = quantile(x, 0.975),
+                                                  mu = mean(x),
+                                                  mod = 'Par pooling')
+                                         }))
 
 post_parPool$x <- paste('nido', 1:n, sep = '')
 
 
-post_noPool <- extract.samples(no_pooling)
+post_noPool <- no_pooling$draws(format = 'df')
 
 
-post_noPool <- as_tibble(post_noPool$alpha)
+post_noPool <- as_tibble(post_noPool[, grepl('alpha', colnames(post_noPool))])
 colnames(post_noPool) <- paste('nido', 1:n, sep = '')
 post_noPool <- do.call('rbind', apply(post_noPool, 2, simplify = 'list', FUN = 
                                         function(x) {
@@ -260,7 +444,9 @@ dat <-
     n = huevos,
     superv = huevos_obs,
     parche = rep(1:10, each = 10),
-    nido = 1:100
+    nido = 1:100,
+    N = length(huevos),
+    N_parche = 10
   )
 ```
 
@@ -282,49 +468,106 @@ El parche corresponde a un factor que altera la supervivencia de los huevos. Es 
 
 Ajustemos el modelo:
 
+```{r, eval =FALSE}
+cat(file = 'multilevel_mods/par_pooling2.stan',
+    '
+    data{
+      int N;
+      int N_parche;
+      array[N] int n;
+      array[N] int superv;
+      array[N] int parche;
+      array[N] int nido;
+    }
+    
+    parameters{
+      vector[N] alpha;
+      vector[N_parche] tau;
+      real muA;
+      real<lower = 0> sigmaA;
+      real<lower = 0> sigmaT;
+    }
+    
+    model{
+      vector[N] p;
+      alpha ~ normal(muA, sigmaA);
+      tau ~ normal(0, sigmaT);
+      muA ~ normal(5, 2.5);
+      sigmaA ~ exponential(1);
+      sigmaT ~ exponential(1);
+    
+      for (i in 1:N) {
+        p[i] = alpha[nido[i]] + tau[parche[i]];
+        p[i] = inv_logit(p[i]);
+      }
+      
+      superv ~ binomial(n, p);
+    
+    }
+    
+    generated quantities {
+      vector[N] log_lik;
+      vector[N] p;
+    
+    for (i in 1:N) {
+        p[i] = alpha[nido[i]] + tau[parche[i]];
+        p[i] = inv_logit(p[i]);
+    }
+    
+    for (i in 1:N) log_lik[i] = binomial_lpmf(superv[i] | n[i], p[i]);
+    }
+    ')
+
+```
+
+
 ```{r, results='hide'}
+
+file <- paste(getwd(), '/par_pooling2.stan', sep = '')
+
+fit_par_pooling2 <- cmdstan_model(file, compile = T)
+
 mod <- 
-  ulam(
-    alist(
-      superv ~ dbinom(n, p),
-      logit(p) <- alpha[nido] + psi[parche],
-      # previas poblacionales
-      alpha[nido] ~ dnorm(mu_j, alpha_j),
-      psi[parche] ~ dnorm(0, tau),
-      # Hiperparámetros (previas nido y parche)
-      mu_j ~ dnorm(5, 2.5),
-      alpha_j ~ dexp(1),
-      tau ~ dexp(1)
-    ), data = dat, chains = 3, warmup = 500, iter = 6e3, cores = 3 
+  fit_par_pooling2$sample(
+    data = dat,
+    iter_sampling = 2e3,
+    iter_warmup = 500,
+    chains = 3,
+    parallel_chains = 3,
+    thin = 3,
+    refresh = 500,
+    seed = 123
   )
 
 ```
 
 ```{r}
-precis(mod)
+(out_par_pool2 <- mod$summary())
+
+par(mfrow = c(3, 3))
+for (i in 1:9) trace_plot(mod, out_par_pool2$variable[i], 3)
+par(mfrow = c(1, 1))
 ```
 
 Tenemos un parámetro por cada nido, uno por cada parche y su parámetro de dispersión y la probabilidad de supervivencia promedio. Antes de discutir las implicaciones de los parámetros, grafiquemos las distribuciones predictivas posteriores y estimemos la precisión del modelo para representar las observaciones.
 
 ```{r}
-post <- extract.samples(mod)
+post <- mod$draws(format = 'df')
 
-post <- lapply(post, FUN = 
-                function(x) {
-                  apply(as.matrix(x), 2, inv_logit)
-                })
+post <- post[, 2:112]
+
+post <- as.data.frame(apply(post, 2, inv_logit))
 
 ppcheck <- sapply(1:100, simplify = 'array', FUN = 
                     function(x) rbinom(1e3, 
                                        size = dat$n, 
-                                       prob = post$mu_j[i]))
+                                       prob = post$muA[i]))
 
-plot(NULL, xlim = c(0, 10), ylim = c(0, 0.6))
+plot(NULL, xlim = c(-1, 10), ylim = c(0, 0.6))
 for (i in 1:100) lines(density(ppcheck[i, ]), lwd = 0.15, col = 'blue')
 lines(density(dat$superv), col = 'red', lwd = 3)
 abline(v = c(mean(apply(ppcheck, 2, mean)), mean(dat$superv)), 
        col = c('blue', 'red'), lty = 3)
-
 ```
 
 El modelo se ajusta adecuadamente a los datos, incluso el promedio estimado de huevos supervivientes es básicamente igual al observado.
@@ -335,12 +578,15 @@ Veamos las implicaciones de los parámetros
 par(mfrow = c(1, 2))
 plot(NULL, xlim = c(0, 1), ylim = c(0, 6), xlab = expression(italic('P')['nido']),
      ylab = 'Densidad', main = 'Nido')
-for (i in 1:100) lines(density(post$alpha[, i, drop = T]), lwd = 0.2)
-lines(density(apply(post$alpha, 2, mean)), lwd = 3, col = 'red')
+for (i in 1:100) lines(density(post[, grep('alpha', colnames(post))][[i]]), lwd = 0.2)
+lines(density(apply(post[, grep('alpha', colnames(post))], 2, mean)), lwd = 3, col = 'red')
 lines(density(p + var_parche), lwd = 3, col = 'blue')
-plot(density(post$alpha_j), main = "Parche", xlim = c(0.47, 0.81), 
-     xlab = expression(sigma[italic(P)]), ylab = '')
-lines(density(post$tau), lty = 2)
+post2 <- mod$draws(format = 'df')
+post2 <- post2[, grepl('sigma', colnames(post2))]
+plot(density(post2$sigmaA), main = "Parche", xlim = c(0, 1.5), 
+     xlab = expression(sigma[italic(P)]), ylab = '',
+     ylim = c(0, 4.5))
+lines(density(post2$sigmaT), lty = 2)
 par(mfrow = c(1, 1))
 ```
 
@@ -349,10 +595,10 @@ par(mfrow = c(1, 1))
 La probabilidad de supervivencia promedio es del *\~40%*.
 
 ```{r}
-mean(apply(post$alpha, 2, mean))
+mean(apply(post[, grepl('alpha', colnames(post))], 2, mean))
 ```
 
-De hecho, el modelo fue capaz de recuperar la distribución de probabilidad generadora de los datos (línea azul). También, con seguridad, podemos afirmar que la variación en la probabilidad de supervivencia entre nidos es mayor a la producida por los diferentes parches. Podríamos generar un nuevo modelo sin el factor parche, compararlos con `WAIC`, y evaluar el aporte del parche en la capacidad predictiva del modelo.
+De hecho, el modelo fue capaz de recuperar la distribución de probabilidad generadora de los datos (línea azul). También, con seguridad, podemos afirmar que la variación en la probabilidad de supervivencia entre nidos es mayor a la producida por los diferentes parches. Podríamos generar un nuevo modelo sin el factor parche, compararlos con `looic`, y evaluar el aporte del parche en la capacidad predictiva del modelo.
 
 Podríamos concluir (ponele...), que los factores que determinan la probabilidad de supervivencia de huevos en nidos del ave `X` operan principalmente a escala local ---la principal variación proviene del `nido`, mientras que el aporte del `parche` es tangencial. **Supongamos que la investigadora alcanzó la misma conclusión y, en un intento de identificar dichos factores locales moduladores de la supervivencia, decidió medir la proporción de cobertura vegetal en un radio de 1 m alrededor de cada nido. Veamos:**
 
@@ -412,7 +658,9 @@ dat <-
     superv = huevos_obs,
     parche = rep(1:10, each = 10), 
     prop_veg = veg,
-    nido = 1:100
+    nido = 1:100,
+    N = length(huevos),
+    N_parches = 10
   )
 
 ```
@@ -431,89 +679,211 @@ $$
 &\sigma_j \sim exponential(1) \\ 
 \end{align}
 $$
+```{r, eval = F}
+cat(file = 'par_pooling3.stan', 
+    '
+    data{
+      int N;
+      int N_parches;
+      array[N] int n;
+      array[N] int superv;
+      array[N] int parche;
+      vector[N] prop_veg;
+      array[N] int nido;
+    }
+    
+    parameters{
+      vector[N] alpha;
+      vector[N_parches] psi;
+      real mu;
+      real beta;
+      real<lower = 0> sigma;
+      real<lower = 0> tau;
+    }
+    
+    model {
+      vector[N] p;
+      
+      for (i in 1:N) {
+        p[i] = alpha[nido[i]] + psi[parche[i]] + beta*prop_veg[i];
+        p[i] = inv_logit(p[i]);
+      }
+    
+      alpha ~ normal(mu, sigma);
+      psi ~ normal(0, tau);
+      mu ~ normal(10, 5);
+      beta ~ normal(0.5, 1);
+      sigma ~ exponential(1);
+      tau ~ exponential(1);
+    
+      superv ~ binomial(n, p);
+    
+    }
+    
+    generated quantities{
+      vector[N] log_lik;
+      vector[N] p;
+    
+      for (i in 1:N){
+        p[i] = alpha[nido[i]] + psi[parche[i]] + beta*prop_veg[i];
+        p[i] = inv_logit(p[i]);
+      }
+    
+      for (i in 1:N) log_lik[i] = binomial_lpmf(superv[i] | n[i], p[i]);
+    }
+    ')
+```
+
 
 ```{r, warning=T, results='hide'}
+file <- paste(getwd(), '/par_pooling3.stan', sep = '')
+
+fit_par_pooling3 <- cmdstan_model(file, compile = T)
+
 mod2.1 <- 
-  ulam(
-    alist(
-      superv ~ dbinom(n, p),
-      logit(p) <- alpha[nido] + psi[parche] + beta*prop_veg,
-      beta ~ dnorm(0.5, 1),
-      alpha[nido] ~ dnorm(mu, sigma),
-      psi[parche] ~ dnorm(0, tau),
-      mu ~ dnorm(10, 5),
-      sigma ~ dexp(1),
-      tau ~ dexp(1)
-    ), data = dat, iter = 5e3, chains = 3, cores = 3, warmup = 500, log_lik = T)
+  fit_par_pooling3$sample(
+    data = dat,
+    iter_sampling = 2e3,
+    iter_warmup = 500,
+    chains = 3,
+    parallel_chains = 3,
+    thin = 3,
+    refresh = 500,
+    seed = 123
+  )
+
+(out_par_pool3 <- mod2.1$summary())
+
+par(mfrow = c(3, 3), mar = c(4, 4, 1, 1))
+for (i in 1:9) trace_plot(mod2.1, out_par_pool3$variable[i], 3)
+par(mfrow = c(1, 1))
+
+
 ```
 
 ```{r}
-precis(mod2.1, depth = 2)
-divergent(mod2.1)
+sum(mod2.1$sampler_diagnostics(format = 'df')$divergent__)
 ```
 
 El modelo tiene un un número tal de transiciones divergente que el *effective sampling size* de algunos parámetros es inferior a 1000 y por lo tanto no deberíamos estar muy confiados de esta estimación. Esto es común en modelos jerárquicos, y sucede porque el algoritmo explora incorrectamente algunas regiones del espacio de los parámetros. Podríamos intentar solucionarlo de varias formas: (i) incrementando el número de iteraciones (no es lo ideal porque no lidiaríamos con el problema de eficiencia en la exploración del algoritmo); (ii) incrementando la tasa de aceptación de valores que explora el algoritmo controlando los "saltos" entre uno y otro valor estimado (leapfrog step); (iii) reparametrización del modelo. Probemos la alternativa *ii* incrementando el `adapt_delta = 0.99`:
 
 ```{r, warning=T, results='hide'}
 mod2.2 <- 
-  ulam(
-    alist(
-      superv ~ dbinom(n, p),
-      logit(p) <- alpha[nido] + psi[parche] + beta*prop_veg,
-      beta ~ dnorm(0.5, 1),
-      alpha[nido] ~ dnorm(mu, sigma),
-      psi[parche] ~ dnorm(0, tau),
-      mu ~ dnorm(10, 5),
-      sigma ~ dexp(1),
-      tau ~ dexp(1)
-    ), data = dat, iter = 5e3, chains = 3, cores = 3, warmup = 500, log_lik = T, 
-    control=list(adapt_delta=0.99))
+  fit_par_pooling3$sample(
+    data = dat,
+    iter_sampling = 2e3,
+    iter_warmup = 500,
+    chains = 3,
+    parallel_chains = 3,
+    thin = 3,
+    refresh = 500,
+    seed = 123,
+    adapt_delta = 0.99
+  )
+  
+(out_par_pool4 <- mod2.2$summary())
+
+par(mfrow = c(3, 3), mar = c(4, 4, 1, 1))
+for (i in 1:9) trace_plot(mod2.2, out_par_pool4$variable[i], 3)
+par(mfrow = c(1, 1))
+
 ```
 
-```{r}
-precis(mod2.2, depth = 2)
-divergent(mod2.2)
-```
 
 Bien, tenemos menos transiciones divergentes, pero el *effective sampling size* continua bajo para algunos coeficientes. Probemos entonces reparametrizando el modelo, específicamente una reparametrización no centrada (non-centered reparametrization). Esta consiste en una estandarización que permite que el algoritmo explore el espacio de los parámetros de manera más eficiente. Veamos:
 
-```{r, warning=TRUE, results='hide'}
-mod2.3 <- 
-  ulam(
-    alist(
-      superv ~ dbinom(n, p),
-      logit(p) <- mu + z[nido] + sigma + # se incluyen en el modelo lineal
-                  x[parche] + tau + 
-                  beta*prop_veg,
-      z[nido] ~ dnorm(0, 1), # intercepto estandarizado del nido
-      x[parche] ~ dnorm(0, 1), # intercepto estandarizado del parche
-      beta ~ dnorm(0.5, 1),
-      mu ~ dnorm(10, 5),
-      sigma ~ dexp(1),
-      tau ~ dexp(1),
-      gq> vector[nido]:alpha <<- mu + z*sigma, # des-estanarización
-      gq> vector[parche]:psi <<- x*tau # des-estanarización
-    ), data = dat, chains = 3, cores = 3, iter = 5e3, warmup = 500, log_lik = T
-  )
+```{r, eval=FALSE}
+cat(file = 'par_pooling4.stan',
+    '
+    data{
+      int N;
+      int N_parches;
+      array[N] int n;
+      array[N] int superv;
+      array[N] int parche;
+      vector[N] prop_veg;
+      array[N] int nido;
+    }
+    
+    parameters{
+      vector[N] alpha;
+      vector[N_parches] psi;
+      real mu;
+      real beta;
+      real<lower = 0> sigma;
+      real<lower = 0> tau;
+    }
+    
+    model{
+      vector[N] p;
+      mu ~ normal(10, 5);
+      alpha ~ normal(0, 1);
+      sigma ~ exponential(1);
+      psi ~ normal(0, 1);
+      tau ~ normal(0, 1);
+      beta ~ normal(0.5, 1);
+    
+      for (i in 1:N) {
+        p[i] = mu + alpha[nido[i]]*sigma +
+                psi[parche[i]]*tau +
+                beta*prop_veg[i];
+        p[i] = inv_logit(p[i]);
+      }
+    
+      superv ~ binomial(n, p);
+    
+    }
+    
+    generated quantities{
+      vector[N] log_lik;
+      vector[N] p;
+      vector[N] nido_P;
+      vector[N_parches] parche_P;
+      nido_P = mu + alpha*sigma;
+      parche_P = psi*tau;
+    
+      for (i in 1:N) {
+        p[i] = mu + alpha[nido[i]]*sigma +
+                psi[parche[i]]*tau +
+                beta*prop_veg[i];
+        p[i] = inv_logit(p[i]);
+      }
+    
+      for (i in 1:N) log_lik[i] = binomial_lpmf(superv[i] | n[i], p[i]);
+    }
+    ')
 ```
 
-```{r}
-divergent(mod2.3)
-round(precis(mod2.3, depth = 2)[-c(1:110),], 2)
+```{r, warning=TRUE, results='hide'}
+file <- paste(getwd(), '/par_pooling4.stan', sep = '')
+fit_par_pooling4 <- cmdstan_model(file, compile = T)
+
+mod2.3 <- 
+  fit_par_pooling4$sample(
+    data = dat,
+    iter_warmup = 500,
+    iter_sampling = 2e3,
+    chains = 3,
+    parallel_chains = 3,
+    thin = 3,
+    refresh = 500,
+    seed = 123
+  )
+
+(out_par_pool5 <- mod2.3$summary())
+par(mfrow = c(3, 3), mar = c(4, 4, 1, 1))
+for (i in 1:9) trace_plot(mod2.3, out_par_pool5$variable[i], 3)
+par(mfrow = c(1, 1))
+
 ```
+
 
 Las transiciones divergentes persisten, pero ahora tenemos suficientes estimados de los parámetros estadísticamente independientes.
-
-Si comparamos los modelos también podemos verificar que el `mod2.3` (reparametrizado) tiene un mayor poder predictivo:
-
-```{r}
-compare(mod2.1, mod2.2, mod2.3)
-```
 
 Veamos ahora el ajuste a los datos del modelo reparametrizado (i.e. distribución predictiva posterior). Además, verifiquemos que podemos recobrar la distribución de probabilidad generadora de los datos ($Beta(3, 5)~+~\sigma,~\sigma \sim Normal(0, \phi)$)
 
 ```{r}
-post <- extract.samples(mod2.3)
+post <- mod2.3$draws(format = 'df')
 
 est_p <- sapply(1:100, simplify = 'array', FUN = 
                   function(i) {
@@ -524,8 +894,9 @@ est_p <- sapply(1:100, simplify = 'array', FUN =
                     i_psi <- dat$parche[i]
                     
                     p <- 
-                      post$mu + post$z[, i_alpha, drop = T] + post$sigma +
-                      post$x[, i_psi, drop = T] + post$tau +
+                      post$mu + 
+                      post[, grepl('alpha', colnames(post))][[i_alpha]] * post$sigma +
+                      post[, grepl('psi', colnames(post))][[i_psi]] + post$tau +
                       (post$beta*dat$prop_veg[i])
                     
                     inv_logit(p)
@@ -539,41 +910,37 @@ est <- sapply(1:100, simplify = 'array', FUN =
                   i_psi <- dat$parche[x]
                   
                   p <- 
-                    post$mu + post$z[, i_alpha, drop = T] + post$sigma +
-                    post$x[, i_psi, drop = T] + post$tau +
-                    (post$beta*dat$prop_veg[x])
-
+                    post$mu + 
+                    post[, grepl('alpha', colnames(post))][[i_alpha]] * post$sigma +
+                    post[, grepl('psi', colnames(post))][[i_psi]] + post$tau +
+                    (post$beta*dat$prop_veg[i])
+                  
                   rbinom(1e3, size = dat$n[x], prob = inv_logit(p))
                   # equivalente a sim(mod2.3, dat)
                 })
 
-par(mfrow = c(1, 2))
 
-plot(density(p + var_parche), ylim = c(0, 2.5), ylab = 'Densidad', 
-     xlab = expression(italic(P)['supervivencia']))
-for (i in 1:100) lines(density(est_p[i, ]), lwd = 0.1)
-
-plot(density(dat$superv), col = 'red', ylab = 'Densidad', 
-     xlab = expression(italic('Huevos sobrevivientes')), ylim = c(0, 0.18))
-for (i in 1:100) lines(density(est[i, ]), lwd = 0.2)
-lines(density(dat$superv), col = 'red', lwd = 2)
-
-par(mfrow = c(1, 1))
 ```
 
 En efecto el modelo está adecuadamente definido.
 
 Comparemos ahora las distribuciones posteriores por nido y parche
 
-```{r}
-par(mfrow = c(1, 2))
+```{r, warning=FALSE}
+par(mfrow = c(1, 2), main = c(4, 4, 1, 1))
 plot(NULL, xlim = c(0, 1), ylim = c(0, 4), ylab = 'Densidad', 
      xlab = expression(italic(P)['nido']))
-for (i in 1:100) lines(density(inv_logit(post$z[, i])), lwd = 0.3)
+for (i in 1:100) {
+  lines(density(inv_logit(post[, grepl('alpha', colnames(post))][[i]])), 
+        lwd = 0.3)
+}
 
 plot(NULL, xlim = c(0, 1), ylim = c(0, 4), ylab = 'Densidad', 
      xlab = expression(italic(P)['parche']))
-for (i in 1:10) lines(density(inv_logit(post$x[, i])), lwd = 0.3)
+for (i in 1:10) {
+  lines(density(inv_logit(post[, grepl('psi', colnames(post))][[i]])), 
+        lwd = 0.3)
+}
 par(mfrow = c(1, 1))
 ```
 
@@ -643,7 +1010,8 @@ $$
 &\phi \sim exponential(1)\\
 &\beta \sim Normal(0.5, 0.2)
 \end{align}
-$$ Detengámonos un momento en las probabilidades previas, y discutamos mi razonamiento para su elección. Los centros urbanos en general tienen un mayor acceso a establecimientos educativos y de salud. Sería razonable esperar que la probabilidad de usar anticonceptivos sea más baja en contextos rurales comparada con los urbanos. La previa $\mu \sim Normal(0, 3)$ implica justamente esto en la escala logit y de probabilidad, veamos:
+$$ 
+Detengámonos un momento en las probabilidades previas, y discutamos mi razonamiento para su elección. Los centros urbanos en general tienen un mayor acceso a establecimientos educativos y de salud. Sería razonable esperar que la probabilidad de usar anticonceptivos sea más baja en contextos rurales comparada con los urbanos. La previa $\mu \sim Normal(0, 3)$ implica justamente esto en la escala logit y de probabilidad, veamos:
 
 ```{r}
 par(mfrow = c(1, 2))
@@ -668,32 +1036,97 @@ curve(inv_logit(0 + mean(betas_i)*x), add = T, lwd = 2, col = 'red')
 
 Una vez definidas las previas, agrupemos las variables en una lista y ajustemos el modelo:
 
+```{r, eval = FALSE}
+cat(file = 'multilevel_mods/par_pooling5.stan', 
+    '
+    data{
+      int N;
+      int N_distrito;
+      int N_urbano;
+      int N_anticonc;
+      array[N] int anticonc;
+      array[N] int distrito;
+      array[N] int urbano;
+      vector[N] edad;
+    }
+    
+    parameters{
+      vector[N_urbano] alpha;
+      vector[N_distrito] theta;
+      real beta;
+      real mu;
+      real<lower = 0> sigma;
+      real<lower = 0> phi;
+    }
+    
+    model{
+      vector[N] p;
+      alpha ~ normal(mu, sigma);
+      mu ~ normal(0, 3);
+      sigma ~ exponential(1);
+      theta ~ normal(0, phi);
+      phi ~ exponential(1);
+      beta ~ normal(0.15, 2);
+    
+      for (i in 1:N) {
+        p[i] = alpha[urbano[i]] + theta[distrito[i]] + beta*edad[i];
+        p[i] = inv_logit(p[i]);
+      }
+    
+      anticonc ~ binomial(1, p);
+    
+    }
+    
+    generated quantities{
+      vector[N] log_lik;
+      vector[N] p;
+    
+      for (i in 1:N) {
+        p[i] = alpha[urbano[i]] + theta[distrito[i]] + beta*edad[i];
+        p[i] = inv_logit(p[i]);
+      }
+    
+      for (i in 1:N) log_lik[i] = binomial_lpmf(anticonc[i] | 1, p[i]);
+    }
+    ')
+
+```
+
 ```{r, results='hide'}
 dat <- 
   list(
     anticonc = d$use.contraception,
     urbano = as.integer(ifelse(d$urban == 1, 1, 2)),
     distrito = d$district_id,
-    edad = d$age.centered
+    edad = d$age.centered,
+    N = nrow(d),
+    N_distrito = length(unique(d$district_id)),
+    N_urbano = 2,
+    N_anticonc = 2
   )
+
+file <- paste(getwd(), '/par_pooling5.stan', sep = '')
+
+fit_par_pooling5 <- cmdstan_model(file, compile = T)
 
 me2 <- 
-  ulam(
-    alist(
-      anticonc ~ dbinom(1, p), 
-      logit(p) <- alpha[urbano] + theta[distrito] + beta*edad,
-      alpha[urbano] ~ dnorm(mu, sigma),
-      mu ~ dnorm(0, 3),
-      sigma ~ dexp(1),
-      theta[distrito] ~ dnorm(0, phi),
-      phi ~ dexp(1), 
-      beta ~ dnorm(0.15, 2)
-    ), data = dat, chains = 3, cores = 3, iter = 2e3, warmup = 500
+  fit_par_pooling5$sample(
+    data = dat,
+    iter_sampling = 2e3,
+    iter_warmup = 500,
+    thin = 3,
+    chains = 3,
+    parallel_chains = 3,
+    refresh = 500,
+    seed = 123
   )
-```
 
-```{r}
-precis(me2, depth = 2)
+out_par_pool6 <- me2$summary()
+out_par_pool6 |> print(n = 10)
+
+par(mfrow = c(3, 3))
+for (i in 1:9) trace_plot(me2, out_par_pool6$variable[i], 3)
+par(mfrow = c(1, 1))
 ```
 
 Todos los parámetros tienen más de mil estimados estadísticamente independientes y `Rhat ~ 1`. Podríamos ---más bien deberíamos, graficar las cadenas para corroborar que convergieron a la misma distribución posterior y exploraron el mismo espacio del parámetro. Pero, en este caso, confiaremos en la *salida* del modelo.
@@ -701,7 +1134,7 @@ Todos los parámetros tienen más de mil estimados estadísticamente independien
 Verifiquemos el ajuste del modelo a los datos:
 
 ```{r}
-post2 <- extract.samples(me2)
+post2 <- me2$draws(format = 'df')
 
 ppcheck <- sapply(1:length(dat$anticonc), simplify = 'array', FUN = 
                     function(x) {
@@ -710,8 +1143,8 @@ ppcheck <- sapply(1:length(dat$anticonc), simplify = 'array', FUN =
                       edad <- dat$edad[x]
                       
                       p <- 
-                        post2$alpha[, urbano] + 
-                        post2$theta[, distrito] + 
+                        post2[, grepl('alpha', colnames(post2))][[urbano]] + 
+                        post2[, grepl('theta', colnames(post2))][[distrito]] + 
                         post2$beta*edad
                       
                       rbinom(1e3, 1, inv_logit(p))
@@ -722,6 +1155,7 @@ plot(NULL, xlim = c(-0.3, 1.3), ylim = c(0, 2.8),
      xlab = 'Uso de anticonceptivo', ylab = 'Densidad')
 for (i in 1:200) lines(density(ppcheck[i, ]), lwd = 0.1)
 lines(density(dat$anticonc), col = 'red', lwd = 2)
+
 ```
 
 El modelo es confiable. Grafiquemos ahora los efectos condicionales, y verifiquemos las implicaciones del distrito y el contexto espacial en la probabilidad de que las mujeres usen algún método anticonceptivo. Primero realicemos cálculos y un poco de carpintería:
@@ -733,8 +1167,8 @@ bar_urb <- unique(tibble(dist = dat$distrito,
 
 post_urb_dist <- sapply(1:nrow(bar_urb), simplify = 'array', FUN = 
                           function(x) {
-                            post2$alpha[, bar_urb$urb[x], drop = T] +
-                              post2$theta[, bar_urb$dist[x], drop = T]
+                            post2[, grepl('alpha', colnames(post2))][[bar_urb$urb[x]]] +
+                              post2[, grepl('theta', colnames(post2))][[bar_urb$dist[x]]]
                           })
 
 bar_urb$level <- ifelse(bar_urb$urb == 1, 'Urbano', 'Rural')
@@ -758,7 +1192,7 @@ post_urb_dist$factor <- gsub('^([aA-zZ]*)([0-9]{1,})', '\\1', post_urb_dist$key)
 
 post_urb_dist[] <- lapply(post_urb_dist, function(x) if (is.double(x)) inv_logit(x) else(x))
 
-alpha_urb <- as_tibble(post2$alpha)
+alpha_urb <- as_tibble(post2[, grepl('alpha', colnames(post2))])
 
 colnames(alpha_urb) <- c('Urbano', 'Rural')
 

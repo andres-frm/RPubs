@@ -100,7 +100,6 @@ cat(file = 'multilevel_mods/pooling.stan',
     )
 ```
 
-
 ```{r, results='hide'}
 
 file <- paste(getwd(), '/pooling.stan', sep = '')
@@ -142,11 +141,42 @@ trace_plot <- function(fit, par, n_chains) {
   
 }
 
+mod_diagnostics <- function(model, output) {
+  
+  l <- model$loo()
+  
+  pk <- l$diagnostics$pareto_k
+  
+  pareto <- tibble(x = 1:length(pk), 
+                   pareto_k = pk)
+  
+  diags <- na.omit(tibble(x = 1:nrow(output), 
+                  rhat = output$rhat, 
+                  ess_bulk = output$ess_bulk, 
+                  ess_tail = output$ess_tail))
+  
+  par(mfrow = c(1, 3), mar = c(4, 4, 1, 1))
+  diags %$% plot(rhat ~ x, pch = 16, col = 'tomato3', xlab = 'Parameters', 
+                 ylab = 'Rhat')
+  diags %$% plot(sort(ess_bulk) ~ x, pch = 16, col = 'cyan4', xlab = 'Parameters', 
+                 ylab = 'ESS')
+  diags %$% points(sort(ess_tail) ~ x, pch = 16, col = 'tan1')
+  pareto %$% plot(pareto_k ~ x, pch = 16, col = 'purple', xlab = 'Observations', 
+                  ylab = 'Pareto-k', ylim = c(-0.5, 1.2))
+  abline(h = c(0.5, 0.7, 1), lty = 3, col = 'red')
+  text(x = rep(nrow(pareto)/2, 4), y = c(0.25, 0.6, 0.8, 1.2), 
+       labels = c('Perfect', 'ok', 'high', 'too hight'))
+  par(mfrow = c(1, 1))
+  
+}
+
 (out_pooling <- pooling$summary())
 
 par(mfrow = c(1, 2), mar = c(4, 4, 1, 1))
 for (i in 1:2) trace_plot(pooling, out_pooling$variable[i], 3)
 par(mfrow = c(1, 1))
+
+mod_diagnostics(pooling, out_pooling)
 
 ```
 
@@ -192,7 +222,6 @@ cat(file = 'multilevel_mods/no_pooling.stan',
     ')
 ```
 
-
 ```{r, results='hide'}
 
 file <- paste(getwd(), '/no_pooling.stan', sep = '')
@@ -213,9 +242,11 @@ no_pooling <-
 
 (out_no_pooling <- no_pooling$summary())
 
-par(mfrow = c(3, 3))
+par(mfrow = c(3, 3), mar = c(4, 4, 1, 1))
 for (i in 1:9) trace_plot(no_pooling, out_no_pooling$variable[i], 3)
 par(mfrow = c(1, 1))
+
+mod_diagnostics(no_pooling, out_no_pooling)
 
 ```
 
@@ -267,7 +298,6 @@ cat(file = 'multilevel_mods/par_pooling.stan',
     ')
 ```
 
-
 ```{r, results='hide'}
 
 file <- paste(getwd(), '/par_pooling.stan', sep = '')
@@ -287,9 +317,11 @@ par_pool <-
 
 (out_par_pool <- par_pool$summary())
 
-par(mfrow = c(3, 3))
+par(mfrow = c(3, 3), mar = c(4, 4, 1, 1))
 for (i in 1:9) trace_plot(par_pool, out_par_pool$variable[i], 3)
 par(mfrow = c(1, 1))
+
+mod_diagnostics(par_pool, out_par_pool)
 
 ```
 
@@ -303,7 +335,9 @@ $$
 &\mu_j \sim Normal(5, 2.5) &,~Previa~para~cada~nido~(hiperparámetro) \\ 
 &\sigma_j \sim exponential(1) &,~Previa~para~cada~nido~(hiperparámetro) \\ 
 \end{align}
-$$ $\mu_j$ y $\sigma_j$ se conocen como *hiperparámetros* porque son parámetros de parámetros (la previa poblacional), por la misma razón $Normal(5, 2.5)$ y $exponential(1)$ se les llama *hiper-previas*.
+$$ 
+
+$\mu_j$ y $\sigma_j$ se conocen como *hiperparámetros* porque son parámetros de parámetros (la previa poblacional), por la misma razón $Normal(5, 2.5)$ y $exponential(1)$ se les llama *hiper-previas*.
 
 Usemos el `looic` para comparar los tres modelos en términos de su capacidad predictiva fuera de la muestra:
 
@@ -520,7 +554,6 @@ cat(file = 'multilevel_mods/par_pooling2.stan',
 
 ```
 
-
 ```{r, results='hide'}
 
 file <- paste(getwd(), '/par_pooling2.stan', sep = '')
@@ -547,6 +580,9 @@ mod <-
 par(mfrow = c(3, 3))
 for (i in 1:9) trace_plot(mod, out_par_pool2$variable[i], 3)
 par(mfrow = c(1, 1))
+
+mod_diagnostics(mod, out_par_pool2)
+
 ```
 
 Tenemos un parámetro por cada nido, uno por cada parche y su parámetro de dispersión y la probabilidad de supervivencia promedio. Antes de discutir las implicaciones de los parámetros, grafiquemos las distribuciones predictivas posteriores y estimemos la precisión del modelo para representar las observaciones.
@@ -679,6 +715,7 @@ $$
 &\sigma_j \sim exponential(1) \\ 
 \end{align}
 $$
+
 ```{r, eval = F}
 cat(file = 'par_pooling3.stan', 
     '
@@ -734,7 +771,6 @@ cat(file = 'par_pooling3.stan',
     ')
 ```
 
-
 ```{r, warning=T, results='hide'}
 file <- paste(getwd(), '/par_pooling3.stan', sep = '')
 
@@ -758,6 +794,7 @@ par(mfrow = c(3, 3), mar = c(4, 4, 1, 1))
 for (i in 1:9) trace_plot(mod2.1, out_par_pool3$variable[i], 3)
 par(mfrow = c(1, 1))
 
+mod_diagnostics(mod2.1, out_par_pool3)
 
 ```
 
@@ -787,8 +824,9 @@ par(mfrow = c(3, 3), mar = c(4, 4, 1, 1))
 for (i in 1:9) trace_plot(mod2.2, out_par_pool4$variable[i], 3)
 par(mfrow = c(1, 1))
 
-```
+mod_diagnostics(mod2.1, out_par_pool3)
 
+```
 
 Bien, tenemos menos transiciones divergentes, pero el *effective sampling size* continua bajo para algunos coeficientes. Probemos entonces reparametrizando el modelo, específicamente una reparametrización no centrada (non-centered reparametrization). Esta consiste en una estandarización que permite que el algoritmo explore el espacio de los parámetros de manera más eficiente. Veamos:
 
@@ -806,9 +844,10 @@ cat(file = 'par_pooling4.stan',
     }
     
     parameters{
-      vector[N] alpha;
-      vector[N_parches] psi;
-      real mu;
+      vector[N] z_alpha;
+      vector[N_parches] z_psi;
+      real mu1;
+      real mu2;
       real beta;
       real<lower = 0> sigma;
       real<lower = 0> tau;
@@ -816,17 +855,20 @@ cat(file = 'par_pooling4.stan',
     
     model{
       vector[N] p;
-      mu ~ normal(10, 5);
-      alpha ~ normal(0, 1);
+      vector[N] alpha;
+      vector[N_parches] psi;
+      mu1 ~ normal(10, 5);
+      mu1 ~ normal(0, 5);
+      z_alpha ~ normal(0, 1);
+      z_psi ~ normal(0, 1);
       sigma ~ exponential(1);
-      psi ~ normal(0, 1);
-      tau ~ normal(0, 1);
+      tau ~ exponential(1);
       beta ~ normal(0.5, 1);
+      alpha = mu1 + z_alpha*sigma;
+      psi = mu2 + z_psi*tau;
     
       for (i in 1:N) {
-        p[i] = mu + alpha[nido[i]]*sigma +
-                psi[parche[i]]*tau +
-                beta*prop_veg[i];
+        p[i] = alpha[nido[i]] + psi[parche[i]] + beta*prop_veg[i];
         p[i] = inv_logit(p[i]);
       }
     
@@ -837,15 +879,13 @@ cat(file = 'par_pooling4.stan',
     generated quantities{
       vector[N] log_lik;
       vector[N] p;
-      vector[N] nido_P;
-      vector[N_parches] parche_P;
-      nido_P = mu + alpha*sigma;
-      parche_P = psi*tau;
+      vector[N] alpha;
+      vector[N_parches] psi;
+      alpha = mu1 + z_alpha*sigma;
+      psi = mu2 + z_psi*tau;
     
       for (i in 1:N) {
-        p[i] = mu + alpha[nido[i]]*sigma +
-                psi[parche[i]]*tau +
-                beta*prop_veg[i];
+        p[i] = alpha[nido[i]] + psi[parche[i]] + beta*prop_veg[i];
         p[i] = inv_logit(p[i]);
       }
     
@@ -875,8 +915,9 @@ par(mfrow = c(3, 3), mar = c(4, 4, 1, 1))
 for (i in 1:9) trace_plot(mod2.3, out_par_pool5$variable[i], 3)
 par(mfrow = c(1, 1))
 
-```
+mod_diagnostics(mod2.3, out_par_pool5)
 
+```
 
 Las transiciones divergentes persisten, pero ahora tenemos suficientes estimados de los parámetros estadísticamente independientes.
 
@@ -893,10 +934,8 @@ est_p <- sapply(1:100, simplify = 'array', FUN =
                     i_alpha <- dat$nido[i]
                     i_psi <- dat$parche[i]
                     
-                    p <- 
-                      post$mu + 
-                      post[, grepl('alpha', colnames(post))][[i_alpha]] * post$sigma +
-                      post[, grepl('psi', colnames(post))][[i_psi]] + post$tau +
+                    p <- post[, grepl('^alpha', colnames(post))][[i_alpha]] +
+                      post[, grepl('^psi', colnames(post))][[i_psi]] + 
                       (post$beta*dat$prop_veg[i])
                     
                     inv_logit(p)
@@ -909,10 +948,9 @@ est <- sapply(1:100, simplify = 'array', FUN =
                   i_alpha <- dat$nido[x]
                   i_psi <- dat$parche[x]
                   
-                  p <- 
-                    post$mu + 
-                    post[, grepl('alpha', colnames(post))][[i_alpha]] * post$sigma +
-                    post[, grepl('psi', colnames(post))][[i_psi]] + post$tau +
+                  p <-
+                    post[, grepl('^alpha', colnames(post))][[i_alpha]] +
+                    post[, grepl('^psi', colnames(post))][[i_psi]] +
                     (post$beta*dat$prop_veg[i])
                   
                   rbinom(1e3, size = dat$n[x], prob = inv_logit(p))
@@ -927,14 +965,17 @@ En efecto el modelo está adecuadamente definido.
 Comparemos ahora las distribuciones posteriores por nido y parche
 
 ```{r, warning=FALSE}
-par(mfrow = c(1, 2), main = c(4, 4, 1, 1))
+par(mfrow = c(1, 3), mar = c(4, 4, 1, 1))
+plot(density(dat$superv), ylim = c(0, 0.25), main = 'ppchecks', 
+     xlab = 'N huevos')
+for (i in 1:100) lines(density(est[i, ]), lwd = 0.1)
+lines(density(dat$superv), col = 'red', lwd = 3)
 plot(NULL, xlim = c(0, 1), ylim = c(0, 4), ylab = 'Densidad', 
      xlab = expression(italic(P)['nido']))
 for (i in 1:100) {
   lines(density(inv_logit(post[, grepl('alpha', colnames(post))][[i]])), 
         lwd = 0.3)
 }
-
 plot(NULL, xlim = c(0, 1), ylim = c(0, 4), ylab = 'Densidad', 
      xlab = expression(italic(P)['parche']))
 for (i in 1:10) {
@@ -1010,8 +1051,7 @@ $$
 &\phi \sim exponential(1)\\
 &\beta \sim Normal(0.5, 0.2)
 \end{align}
-$$ 
-Detengámonos un momento en las probabilidades previas, y discutamos mi razonamiento para su elección. Los centros urbanos en general tienen un mayor acceso a establecimientos educativos y de salud. Sería razonable esperar que la probabilidad de usar anticonceptivos sea más baja en contextos rurales comparada con los urbanos. La previa $\mu \sim Normal(0, 3)$ implica justamente esto en la escala logit y de probabilidad, veamos:
+$$ Detengámonos un momento en las probabilidades previas, y discutamos mi razonamiento para su elección. Los centros urbanos en general tienen un mayor acceso a establecimientos educativos y de salud. Sería razonable esperar que la probabilidad de usar anticonceptivos sea más baja en contextos rurales comparada con los urbanos. La previa $\mu \sim Normal(0, 3)$ implica justamente esto en la escala logit y de probabilidad, veamos:
 
 ```{r}
 par(mfrow = c(1, 2))

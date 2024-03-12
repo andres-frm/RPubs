@@ -10,9 +10,10 @@
     }
     
     parameters{
-      vector[N] alpha;
-      vector[N_parches] psi;
-      real mu;
+      vector[N] z_alpha;
+      vector[N_parches] z_psi;
+      real mu1;
+      real mu2;
       real beta;
       real<lower = 0> sigma;
       real<lower = 0> tau;
@@ -20,17 +21,20 @@
     
     model{
       vector[N] p;
-      mu ~ normal(10, 5);
-      alpha ~ normal(0, 1);
+      vector[N] alpha;
+      vector[N_parches] psi;
+      mu1 ~ normal(10, 5);
+      mu1 ~ normal(0, 5);
+      z_alpha ~ normal(0, 1);
+      z_psi ~ normal(0, 1);
       sigma ~ exponential(1);
-      psi ~ normal(0, 1);
-      tau ~ normal(0, 1);
+      tau ~ exponential(1);
       beta ~ normal(0.5, 1);
+      alpha = mu1 + z_alpha*sigma;
+      psi = mu2 + z_psi*tau;
     
       for (i in 1:N) {
-        p[i] = mu + alpha[nido[i]]*sigma +
-                psi[parche[i]]*tau +
-                beta*prop_veg[i];
+        p[i] = alpha[nido[i]] + psi[parche[i]] + beta*prop_veg[i];
         p[i] = inv_logit(p[i]);
       }
     
@@ -41,15 +45,13 @@
     generated quantities{
       vector[N] log_lik;
       vector[N] p;
-      vector[N] nido_P;
-      vector[N_parches] parche_P;
-      nido_P = mu + alpha*sigma;
-      parche_P = psi*tau;
+      vector[N] alpha;
+      vector[N_parches] psi;
+      alpha = mu1 + z_alpha*sigma;
+      psi = mu2 + z_psi*tau;
     
       for (i in 1:N) {
-        p[i] = mu + alpha[nido[i]]*sigma +
-                psi[parche[i]]*tau +
-                beta*prop_veg[i];
+        p[i] = alpha[nido[i]] + psi[parche[i]] + beta*prop_veg[i];
         p[i] = inv_logit(p[i]);
       }
     

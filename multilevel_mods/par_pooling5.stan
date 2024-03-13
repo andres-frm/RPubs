@@ -7,29 +7,33 @@
       array[N] int anticonc;
       array[N] int distrito;
       array[N] int urbano;
-      vector[N] edad;
+      //vector[N] edad;
     }
     
     parameters{
-      vector[N_urbano] alpha;
-      vector[N_distrito] theta;
-      real beta;
-      real mu;
+      vector[N_distrito] z_alpha;
+      vector[N_distrito] z_beta;
+      real beta1;
+      real alpha1;
       real<lower = 0> sigma;
       real<lower = 0> phi;
     }
     
     model{
       vector[N] p;
-      alpha ~ normal(mu, sigma);
-      mu ~ normal(0, 3);
+      vector[N_distrito] alpha;
+      vector[N_distrito] beta;
+      alpha1 ~ normal(0, 1);
+      z_alpha ~ normal(0, 1);
       sigma ~ exponential(1);
-      theta ~ normal(0, phi);
+      beta1 ~ normal(0, 1);
+      z_beta ~ normal(0, 1);
       phi ~ exponential(1);
-      beta ~ normal(0.15, 2);
+      alpha = alpha1 + z_alpha*sigma;
+      beta = beta1 + z_beta*phi;
     
       for (i in 1:N) {
-        p[i] = alpha[urbano[i]] + theta[distrito[i]] + beta*edad[i];
+        p[i] = alpha[distrito[i]] + beta[distrito[i]]*urbano[i]; 
         p[i] = inv_logit(p[i]);
       }
     
@@ -40,9 +44,13 @@
     generated quantities{
       vector[N] log_lik;
       vector[N] p;
+      vector[N_distrito] alpha;
+      vector[N_distrito] beta;
+      alpha = alpha1 + z_alpha*sigma;
+      beta = beta1 + z_beta*phi;
     
       for (i in 1:N) {
-        p[i] = alpha[urbano[i]] + theta[distrito[i]] + beta*edad[i];
+        p[i] = alpha[distrito[i]] + beta[distrito[i]]*urbano[i]; 
         p[i] = inv_logit(p[i]);
       }
     

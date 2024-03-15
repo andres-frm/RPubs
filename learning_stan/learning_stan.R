@@ -13,76 +13,7 @@ sapply(paquetes,
 
 options(mc.cores = parallel::detectCores())
 
-cat(file = 'stan/chapter3_1.stan', 
-    '
-    data {
-        int N;
-        vector[N] est;
-        array[N] int est1;
-        vector[N] est2;
-    }
-    
-    parameters {
-        real mu;
-        real<lower = 0> sigma;
-        real lambda;
-        real mu2;
-        real<lower = 0> sigma1;
-    }
-    
-    model {
-        
-        for (i in 1:N) {
-          est[i] ~ normal(mu, sigma);
-        }
-    
-        for (i in 1:N) {
-          est1[i] ~ poisson(exp(lambda));
-        }
-    
-        for (i in 1:N) {
-          target += normal_lpdf(est2[i] | mu2, sigma1);
-        }
-    
-    
-        mu ~ normal(120, 30);
-        sigma ~ exponential(1);
-        lambda ~ normal(5, 1);
-        target += normal_lpdf(mu2 | 120, 30);
-        target += exponential_lpdf(sigma1 | 1);
-    
-    // este es un comentario
-    
-    /* este también es un comentario,
-    pero puede distribuirse en diferentes 
-    lines */
-    
-    }
-    ')
-
-writeLines(readLines('stan/chapter3_1.stan'))
-
-m3_1_file <- paste(getwd(), '/stan/', 'chapter3_1.stan', sep = '')
-
-m3_1 <- cmdstan_model(m3_1_file, compile = T)
-
-d <- list(est = rnorm(100, 140, 20), 
-          est1 = rpois(100, 120),
-          est2 = rnorm(100, 140, 20),
-          N = 100)
-
-fit_me_1 <- 
-  m3_1$sample(data = d,
-              seed = 123, 
-              refresh = 500, 
-              parallel_chains = 3, 
-              chains = 3, 
-              iter_sampling = 2e3, 
-              iter_warmup = 500)
-
-fit_me_1_out <- fit_me_1$summary()
-
-print(fit_me_1)
+# ===== functions ======
 
 trace_plot <- function(fit, par, n_chains) {
   
@@ -139,9 +70,84 @@ mod_diagnostics <- function(model, output) {
   
 }
 
+# ======================================== #
+
+
+cat(file = 'learning_stan/chapter3_1.stan', 
+    '
+    data {
+        int N;
+        vector[N] est;
+        array[N] int est1;
+        vector[N] est2;
+    }
+    
+    parameters {
+        real mu;
+        real<lower = 0> sigma;
+        real lambda;
+        real mu2;
+        real<lower = 0> sigma1;
+    }
+    
+    model {
+        
+        for (i in 1:N) {
+          est[i] ~ normal(mu, sigma);
+        }
+    
+        for (i in 1:N) {
+          est1[i] ~ poisson(exp(lambda));
+        }
+    
+        for (i in 1:N) {
+          target += normal_lpdf(est2[i] | mu2, sigma1);
+        }
+    
+    
+        mu ~ normal(120, 30);
+        sigma ~ exponential(1);
+        lambda ~ normal(5, 1);
+        target += normal_lpdf(mu2 | 120, 30);
+        target += exponential_lpdf(sigma1 | 1);
+    
+    // este es un comentario
+    
+    /* este también es un comentario,
+    pero puede distribuirse en diferentes 
+    lines */
+    
+    }
+  
+    ')
+
+writeLines(readLines('learning_stan/chapter3_1.stan'))
+
+m3_1_file <- paste(getwd(), '/learning_stan/chapter3_1.stan', sep = '')
+
+m3_1 <- cmdstan_model(m3_1_file, compile = T)
+
+d <- list(est = rnorm(100, 140, 20), 
+          est1 = rpois(100, 120),
+          est2 = rnorm(100, 140, 20),
+          N = 100)
+
+fit_me_1 <- 
+  m3_1$sample(data = d,
+              seed = 123, 
+              refresh = 500, 
+              parallel_chains = 3, 
+              chains = 3, 
+              iter_sampling = 2e3, 
+              iter_warmup = 500)
+
+fit_me_1_out <- fit_me_1$summary()
+
 par(mfrow = c(3, 2), mar = c(4, 4, 1, 1))
 for (i in 1:6) trace_plot(fit_me_1, fit_me_1_out$variable[i], 3)
 par(mfrow = c(1, 1))
+
+
 
 # ====== chapter 4 =======
 
@@ -161,93 +167,160 @@ trofeos <- rpois(N, (2 + 0.5*year))
 plot(income ~ year)
 plot(trofeos ~ year)
 
+# version 1
 
-cat(file = 'stan/cap3_2.stan', 
+cat(file = 'learning_stan/cap3_2_1.stan', 
     '
     data {
       int N;
-      vector[N] income;
       array[N] int trofeos; 
-      array[N] int trofeos2;
-      array[N] int trofeos3; 
-      vector[N] year;
+      array[N] int year;
     }
     
     parameters {
       real alpha;
       real beta;
-      real<lower = 0> sigma;
-      real alpha1;
-      real beta1;
-      real alpha2;
-      real beta2;
-      real alpha3;
-      real beta3;
+     
     }
     
     model {
-    
-      vector[N] lambda; 
       
       for (i in 1:N) {
         
-        // M1. log de la funcion de distribución de probabilidas
-        target += normal_lpdf(income[1:i] | 
-                              alpha + beta*year[1:i], sigma);
-        
-        // M2. versión abreviada con el muestreo explícito (M 2)
-        trofeos[1:i] ~ poisson(exp(alpha1 + beta1*year[1:i]));
-    
-        // M3. versión larga con el muestreo explícito (M 3)
-        lambda[i] = alpha2 + beta2*year[i];
-        lambda[i] = exp(lambda[i]);
+        // M1. log p de la funcion de distribución de probabilidas
+        target += poisson_lpmf(trofeos[i] | 
+                               exp(alpha + beta*year[i]));
         
       }
       
-      // M4. versión vectorizada del log de la función de distribución de probabilidad
-      target += poisson_lpmf(trofeos3 | exp(alpha3 + beta3*year));
-      target += normal_lpdf(alpha3 | 10, 5); // previa M4
-      target += normal_lpdf(beta3 | 0.5, 1); // previa M4
-    
-      target += normal_lpdf(alpha | 50, 15); // previa M1
+      target += normal_lpdf(alpha | 10, 5); // previa M1
       target += normal_lpdf(beta | 0.5, 1);  // previa M1
-      target += exponential_lpdf(sigma | 1); // previa M1
+    
+    }
+    
+    generated quantities{
+      vector[N] log_lik;
+      vector[N] mu;
       
-      alpha1 ~ normal(10, 5); // previa M2
-      beta1 ~ normal(0.5, 1); // previa M2
+      for (i in 1:N) {
+      
+        mu[i] = alpha + beta*year[i];
+        mu[i] = exp(mu[i]);
+        
+      }
     
-      alpha2 ~ normal(10, 5); // previa M3
-      beta2 ~ normal(0.5, 1); // previa M3
-      trofeos2 ~ poisson(lambda);
-    
+      for (i in 1:N) log_lik[i] = poisson_lpmf(trofeos[i] | 
+                                              exp(alpha + beta*year[i]));
     }
     ')
 
-path.file <- paste(getwd(), '/stan/', 'cap3_2.stan', sep = '')
+path.file <- paste(getwd(), '/learning_stan/cap3_2_1.stan', sep = '')
 
-fit_cap3_2 <- cmdstan_model(path.file, compile = T)
+fit_cap3_2_1 <- cmdstan_model(path.file, compile = T)
 
-m_cap3_2 <- 
-  fit_cap3_2$sample(data = 
+m_cap3_2_1 <- 
+  fit_cap3_2_1$sample(data = 
                       list(N = N, year = year, 
-                           income = income, 
-                           trofeos = trofeos,
-                           trofeos2 = trofeos,
-                           trofeos3 = trofeos), 
+                           trofeos = trofeos), 
                     chains = 3, 
                     parallel_chains = 3, 
-                    iter_sampling = 2e3, 
+                    iter_sampling = 4e3, 
                     iter_warmup = 500, 
                     thin = 3,
                     seed = 123)
 
-m_cap3_2_out <- m_cap3_2$summary()
-
-
+m_cap3_21_out <- m_cap3_2_1$summary()
 
 par(mfrow = c(4, 3))
-for (i in 1:10) trace_plot(m_cap3_2, m_cap3_2_out$variable[i], 3)
+for (i in 1:10) trace_plot(m_cap3_2_1, m_cap3_21_out$variable[i], 3)
 par(mfrow = c(1, 1))
+
+mod_diagnostics(m_cap3_2_1, m_cap3_21_out)
+
+# version 2
+
+cat(file = 'learning_stan/cap3_2_3.stan', 
+    '
+    data {
+      int N;
+      array[N] int trofeos; 
+      array[N] int year;
+    }
+    
+    parameters {
+      real alpha;
+      real beta;
+     
+    }
+    
+    model {
+    
+      vector[N] lambda;  
+    
+      for (i in 1:N) {
+        
+        // M3. versión larga con el muestreo explícito (M 3)
+        lambda[i] = alpha + beta*year[i];
+        lambda[i] = exp(lambda[i]);
+        
+      }
+    
+      trofeos ~ poisson(lambda);  
+    
+      alpha ~ normal(10, 5); // previa M2
+      beta ~ normal(0.5, 1);  // previa M2
+    
+    }
+    
+    generated quantities{
+      vector[N] log_lik;
+      vector[N] mu;
+      
+      for (i in 1:N) {
+      
+        mu[i] = alpha + beta*year[i];
+        mu[i] = exp(mu[i]);
+        
+      }
+    
+      for (i in 1:N) log_lik[i] = poisson_lpmf(trofeos[i] | 
+                                               alpha + beta*year[i]);
+    }
+    ')
+
+path.file <- paste(getwd(), '/learning_stan/cap3_2_3.stan', sep = '')
+
+fit_cap3_2_3 <- cmdstan_model(path.file, compile = T)
+
+m_cap3_2_3 <- 
+  fit_cap3_2_3$sample(data = 
+                        list(N = N, year = year,
+                             trofeos = trofeos), 
+                      chains = 3, 
+                      parallel_chains = 3, 
+                      iter_sampling = 4e3, 
+                      iter_warmup = 500, 
+                      thin = 3,
+                      seed = 123)
+
+m_cap3_23_out <- m_cap3_2_3$summary()
+
+par(mfrow = c(4, 3))
+for (i in 1:10) trace_plot(m_cap3_2_3, m_cap3_23_out$variable[i], 3)
+par(mfrow = c(1, 1))
+
+mod_diagnostics(m_cap3_2_3, m_cap3_23_out)
+
+loo_compare(m_cap3_2_1$loo(), m_cap3_2_3$loo())
+
+m_cap3_21_out[2:3,]
+m_cap3_23_out[2:3,]
+
+
+
+
+
+
 
 post_m_cap3_2 <- m_cap3_2$draws(format = 'df')
 

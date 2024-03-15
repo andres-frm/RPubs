@@ -13,12 +13,18 @@
     
     model {
     
-      
+      vector[N] lambda;  
+    
+      for (i in 1:N) {
         
-      // M2. versión abreviada con el muestreo explícito (M 2)
-      trofeos ~ poisson(exp(alpha + beta*year));
+        // M3. versión larga con el muestreo explícito (M 3)
+        lambda[i] = alpha + beta*year[i];
+        lambda[i] = exp(lambda[i]);
         
-      
+      }
+    
+      trofeos ~ poisson(lambda);  
+    
       alpha ~ normal(10, 5); // previa M2
       beta ~ normal(0.5, 1);  // previa M2
     

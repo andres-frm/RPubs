@@ -2,7 +2,7 @@
     data {
       int N;
       array[N] int trofeos; 
-      vector[N] year;
+      array[N] int year;
     }
     
     parameters {
@@ -16,8 +16,8 @@
       for (i in 1:N) {
         
         // M1. log p de la funcion de distribución de probabilidas
-        target += poisson_lpmf(trofeos[1:i] | 
-                               exp(alpha + beta*year[1:i]));
+        target += poisson_lpmf(trofeos[i] | 
+                               exp(alpha + beta*year[i]));
         
       }
       
@@ -32,12 +32,12 @@
       
       for (i in 1:N) {
       
-        mu[1:i] = alpha + beta*year[1:i];
-        mu[1:i] = exp(mu[1:i]);
+        mu[i] = alpha + beta*year[i];
+        mu[i] = exp(mu[i]);
         
       }
     
-      for (i in 1:N) log_lik[i] = poisson_lpmf(trofeos[1:i] | 
-                                              exp(alpha + beta*year[1:i]));
+      for (i in 1:N) log_lik[i] = poisson_lpmf(trofeos[i] | 
+                                              exp(alpha + beta*year[i]));
     }
     

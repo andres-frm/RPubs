@@ -11,7 +11,7 @@ sapply(paquetes,
          else install.packages(x); library(x, character.only = T)
        })
 
-options(mc.cores = parallel::detectCores())
+options(mc.cores = parallel::detectCores(), mar = c(4, 4, 1, 1))
 
 # ===== functions ======
 
@@ -318,28 +318,149 @@ m_cap3_23_out[2:3,]
 
 
 
+#### transformed parameters and generated quantities 
 
 
+cat(file = 'learning_stan/cap_3_2_31.stan', 
+    '
+    data {
+      int N;
+      int N_x;
+      array[N] int trofeos; 
+      array[N_x] int year_x;
+      array[N] int year;
+    }
+    
+    parameters {
+      real alpha;
+      real beta;
+     
+    }
+    
+    transformed parameters { // se usa para guardar muestras del lambda o para generar variables
+                            // que son usadas tanto en el bloque de modelo como en el de  
+                            // generated quantities
+      
+    vector[N] lambda;  
+    
+      for (i in 1:N) {
+        
+        // M3. versión larga con el muestreo explícito (M 3)
+        lambda[i] = alpha + beta*year[i];
+        lambda[i] = exp(lambda[i]); 
+        
+      }
+    
+    }
+    
+    model {
 
+      trofeos ~ poisson(lambda);  
+    
+      alpha ~ normal(10, 5); // previa M2
+      beta ~ normal(0.5, 1);  // previa M2
+    
+    }
+    
+    generated quantities{
+      vector[N] log_lik;
+      vector[N] mu;
+      vector[N_x] theta;
+      array[N_x] real pred;
+      array[N] int ppcheck;
+      
+      for (i in 1:N) {
+      
+        mu[i] = alpha + beta*year[i];
+        mu[i] = exp(mu[i]);
+        
+      }
+    
+      for (i in 1:N) log_lik[i] = poisson_lpmf(trofeos[i] | 
+                                               alpha + beta*year[i]);
+      
+      ppcheck = poisson_rng(mu);
+    
+      for (i in 1:N_x) {
+      
+        theta[i] = alpha + beta*year_x[i];
+        theta[i] = exp(theta[i]);
+        
+      }
+    
+      pred = poisson_rng(theta);
+    
+    }')
 
-post_m_cap3_2 <- m_cap3_2$draws(format = 'df')
+path.file <- paste(getwd(), '/learning_stan/cap_3_2_31.stan', sep = '')
 
-post_m_cap3_2 <- post_m_cap3_2[, -c(1:4)]
+fit_cap3_2_31 <- cmdstan_model(path.file, compile = T)
 
-alpha <- grep('alpha', colnames(post_m_cap3_2))
-beta <- grep('beta', colnames(post_m_cap3_2))
+m_cap3_2_31 <- 
+  fit_cap3_2_31$sample(data = 
+                        list(N = N, year = year,
+                             trofeos = trofeos, 
+                             year_x = seq(min(year), max(year), by = 1),
+                             N_x = length(seq(min(year), max(year), by = 1))), 
+                      chains = 3, 
+                      parallel_chains = 3, 
+                      iter_sampling = 4e3, 
+                      iter_warmup = 500, 
+                      thin = 3,
+                      seed = 123)
 
-par(mfrow = c(1, 2))
-plot(density(post_m_cap3_2[, alpha[1], drop = T]), 
-     xlab = 'Alpha', main = '', xlim = c(0.8, 3))
-for (i in 1:3) lines(density(post_m_cap3_2[, alpha[i], drop = T]), 
-                    xlab = 'Alpha', main = '', col = i)
+m_cap3_231_out <- m_cap3_2_31$summary()
 
-plot(density(post_m_cap3_2[, beta[1], drop = T]), 
-     xlab = 'Beta', main = '', xlim = c(-0.02, 0.07))
-for (i in 1:3) lines(density(post_m_cap3_2[, beta[i], drop = T]), 
-                     xlab = 'Beta', main = '', col = i)
+par(mfrow = c(4, 3), mar = c(4, 4, 1, 1))
+for (i in 1:10) trace_plot(m_cap3_2_31, m_cap3_231_out$variable[i], 3)
 par(mfrow = c(1, 1))
+
+post <- m_cap3_2_31$draws(format = 'df')
+
+pred <- post[, grepl('pred', colnames(post))]
+
+pred <- 
+  apply(pred, 2, 
+      function(x) {
+        tibble(mu = mean(x), 
+               li = quantile(x, 0.025), 
+               ls = quantile(x, 0.975))
+      })
+
+pred <- do.call('rbind', pred)
+
+pred$x <- seq(min(year), max(year), by = 1)
+
+est <- post[, grepl('theta', colnames(post))]
+
+est <- 
+  apply(est, 2, 
+        function(x) {
+          tibble(mu = mean(x), 
+                 li = quantile(x, 0.025), 
+                 ls = quantile(x, 0.975))
+        })
+
+est <- do.call('rbind', est)
+
+est$x <- seq(min(year), max(year), by = 1)
+
+ggplot() +
+  geom_line(data = pred, aes(x = x, y = mu)) +
+  geom_ribbon(data = pred, aes(x = x, ymin = li, ymax = ls), 
+              alpha = 0.3) +
+  geom_ribbon(data = est, aes(x = x, ymin = li, ymax = ls), 
+              alpha = 0.3) +
+  geom_point(data = tibble(x = year, y = trofeos), aes(x, y))
+
+
+ppcheck <- as.matrix(post[, grepl('ppcheck', colnames(post))])
+
+plot(density(trofeos), main = '', xlab = 'Trofeos', ylim = c(0, 0.20),
+     xlim = c(-5, 20))
+for (i in 1:200) lines(density(ppcheck[i, ]), lwd = 0.1)
+lines(density(trofeos), col = 'red', lwd = 2)
+
 
 
 

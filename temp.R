@@ -4,61 +4,7 @@ sapply(paquetes, library, character.only = T)
 
 options(mc.cores = parallel::detectCores())
 
-
-trace_plot <- function(fit, par, n_chains) {
-  
-  d <- as_mcmc.list(fit)
-  
-  d <- lapply(d, FUN = 
-                function(x) {
-                  x <- as.data.frame(unclass(as.matrix(x)))
-                  x$iter <- 1:nrow(x)
-                  x
-                })
-  
-  for (i in 1:n_chains) d[[i]]$chain <- i
-  
-  plot(d[[1]][, 'iter', drop = T], d[[1]][, par, drop = T], 
-       type = 'l', col = 1, main = '', ylab = par, 
-       xlab = 'Iteration')
-  for (i in 2:n_chains) {
-    lines(d[[i]][, 'iter', drop = T], d[[i]][, par, drop = T], 
-          col = i, main = '', ylab = par, 
-          xlab = 'Iteration')
-  }
-  
-}
-
-mod_diagnostics <- function(model, output) {
-  
-  l <- model$loo()
-  
-  pk <- l$diagnostics$pareto_k
-  
-  pareto <- tibble(x = 1:length(pk), 
-                   pareto_k = pk)
-  
-  diags <- na.omit(tibble(x = 1:nrow(output), 
-                          rhat = output$rhat, 
-                          ess_bulk = output$ess_bulk, 
-                          ess_tail = output$ess_tail))
-  
-  par(mfrow = c(1, 3), mar = c(4, 4, 1, 1))
-  diags %$% plot(rhat ~ x, pch = 16, col = 'tomato3', xlab = 'Parameters', 
-                 ylab = 'Rhat')
-  abline(h = 1.1, lty = 3, col = 'red')
-  diags %$% plot(sort(ess_bulk) ~ x, pch = 16, col = 'cyan4', xlab = 'Parameters', 
-                 ylab = 'ESS')
-  diags %$% points(sort(ess_tail) ~ x, pch = 16, col = 'tan1')
-  abline(h = 1000, lty = 3, col = 'red')
-  pareto %$% plot(pareto_k ~ x, pch = 16, col = 'purple', xlab = 'Observations', 
-                  ylab = 'Pareto-k', ylim = c(-0.5, 1.2))
-  abline(h = c(0.5, 0.7, 1), lty = 3, col = 'red')
-  text(x = rep(nrow(pareto)/2, 4), y = c(0.25, 0.6, 0.8, 1.2), 
-       labels = c('Perfect', 'ok', 'high', 'too hight'))
-  par(mfrow = c(1, 1))
-  
-}
+source('functions_mod_diagnostics.R')
 
 a <- 3.5 # average morning wait time 
 b <- (-1) # average difference afternoon wait time
@@ -120,8 +66,8 @@ par(mfrow = c(3, 3), mar = c(4, 4, 1, 1))
 for (i in 1:9) {
   
   R <- rlkjcorr(1e3, 
-                K = 2, # número de parámetros (dimension de la matriz)
-                eta = i) # forma de la distribución
+                K = 2, # n?mero de par?metros (dimension de la matriz)
+                eta = i) # forma de la distribuci?n
   
   plot(density(R[, 1, 2]),
        main = '', 
@@ -680,5 +626,284 @@ for (i in 1:9) trace_plot(m2, out_m2$variable[i], 3)
 par(mfrow = c(1, 1))
 
 mod_diagnostics(m2, out_m2)
+
+
+#===============
+#
+
+paquetes <- c("tidyverse", "magrittr", 'patchwork', 'rstan',
+              'cmdstanr', 'loo', 'palmerpenguins')
+sapply(paquetes, library, character.only = T)
+
+options(mc.cores = parallel::detectCores())
+
+source('functions_mod_diagnostics.R')
+
+d <- na.omit(penguins)
+
+d <- d |> select(species, year, island, sex, flipper_length_mm, body_mass_g)
+
+d$year <- as.factor(d$year)
+
+dat <- lapply(d, function(x) if(!is.double(x)) as.integer(x) else(x))
+
+dat$N <- length(dat$species)
+dat$N_spp <- max(dat$species)
+dat$N_sex <- 2
+dat$N_island <- max(dat$island)
+dat$N_year <- max(dat$year)
+
+cat(file = 'penguins_par_pool.stan', 
+    '
+    data{
+      int N;
+      int N_spp;
+      int N_sex;
+      int N_island;
+      int N_year;
+      vector[N] flipper_length_mm;
+      vector[N] body_mass_g;
+      array[N] int species;
+      array[N] int year;
+      array[N] int island;
+      array[N] int sex;
+    }
+    
+    parameters{
+      
+      vector[N_island] z_I;
+      real mu_I;
+      real<lower = 0> sigma1;
+      matrix[N_spp, N_sex] z_spp;
+      real mu_spp;
+      real<lower = 0> sigma2;
+      vector[N_year] z_Y;
+      real mu_Y;
+      real<lower = 0> sigma3;
+      matrix[N_spp, N_sex] beta;
+      real<lower = 0> sigma;
+      
+    }
+    
+    model{
+      vector[N] mu;
+      vector[N_island] I;
+      matrix[N_spp, N_sex] spp;
+      vector[N_year] Y;
+      mu_I ~ normal(0, 1);
+      z_I ~ normal(0, 0.5);
+      mu_spp ~ normal(200, 50);
+      to_vector(z_spp) ~ normal(0, 1);
+      mu_Y ~ normal(0, 1);
+      z_Y ~ normal(0, 0.5);
+      to_vector(beta) ~ normal(1, 1);
+      sigma ~ exponential(1);
+      sigma1 ~ exponential(1);
+      sigma2 ~ exponential(1);
+      sigma3 ~ exponential(1);
+      I = mu_I + z_I*sigma1;
+      spp = mu_spp + z_spp*sigma2;
+      Y = mu_Y + z_Y*sigma3;
+    
+      for (i in 1:N) {
+        mu[i] = spp[species[i], sex[i]] +  
+                I[island[i]] + Y[year[i]] + 
+                beta[species[i], sex[i]]*body_mass_g[i];
+      }
+      
+      flipper_length_mm ~ normal(mu, sigma);
+    }
+    
+    generated quantities{
+      vector[N] log_lik;
+      vector[N] mu;
+      vector[N_island] I;
+      matrix[N_spp, N_sex] spp;
+      vector[N_year] Y;
+      I = mu_I + z_I*sigma1;
+      spp = mu_spp + z_spp*sigma2;
+      Y = mu_Y + z_Y*sigma3;
+      array[N] real ppcheck;
+    
+      for (i in 1:N) {
+        mu[i] = spp[species[i], sex[i]] +  
+                I[island[i]] + Y[year[i]] + 
+                beta[species[i], sex[i]]*body_mass_g[i];
+      }
+      
+      for (i in 1:N) log_lik[i] = normal_lpdf(flipper_length_mm[i] | mu[i], sigma);
+    
+      ppcheck = normal_rng(mu, sigma);
+    }')
+
+file <- paste(getwd(), '/penguins_par_pool.stan', sep = '')
+
+fit_m1 <- cmdstan_model(file, compile = T)
+
+m1 <- 
+  fit_m1$sample(
+    data = dat,
+    iter_sampling = 4e3,
+    iter_warmup = 500,
+    chains = 3,
+    parallel_chains = 3,
+    thin = 3,
+    refresh = 500,
+    seed = 123
+  )
+
+out_m1 <- m1$summary()
+
+mod_diagnostics(m1, out_m1)
+
+ppcheck_m1 <- m1$draws(variables = 'ppcheck', format = 'matrix')
+
+plot(NULL, main = 'Partial pooling (intercepts)', 
+     xlim = c(160, 245), ylim = c(0, 0.04), xlab = 'mm', 
+     ylab = 'Density')
+for (i in 1:100) lines(density(ppcheck_m1[i, ]), lwd = 0.1)
+lines(density(dat$flipper_length_mm), col = 'red')
+
+post_m1 <- m1$draws(variables = c('spp', 'I', 'Y', 'beta', 'sigma'), 
+                    format = 'df')
+
+post_m1 <- 
+  list(spp = post_m1[, grepl('spp', colnames(post_m1))],
+       I = post_m1[, grepl('^I', colnames(post_m1))],
+       Y = post_m1[, grepl('^Y', colnames(post_m1))], 
+       beta = post_m1[, grepl('beta', colnames(post_m1))])
+
+x_seq <- seq(min(dat$body_mass_g), max(dat$body_mass_g), length.out = 100)
+
+sex <- c('H', 'M')
+vars <- list(x = 1:3, x1 = 4:6)
+
+est_cor_H <- lapply(1:2, FUN = 
+                      function(i) {
+                        
+                        lapply(1:100, FUN = 
+                                 function(x) {
+                                   
+                                   df <- 
+                                     sapply(vars[[i]], FUN = 
+                                              function(z) {
+                                                
+                                                post_m1$spp[, z] + # hembras
+                                                  apply(post_m1$I, 1, mean) +
+                                                  apply(post_m1$Y, 1, mean) +
+                                                  post_m1$beta[, z, drop = T]*x_seq[x]
+                                                
+                                              })
+                                   df <- as_tibble(df)
+                                   colnames(df) <- levels(d$species)
+                                   df <- gather(df)
+                                   df$sex <- sex[i]
+                                   df$x <- x_seq[x]
+                                   df$dat <- x
+                                   df
+                                   
+                                 })
+                        
+                      })
+
+for (i in 1:2) est_cor_H[[i]] <- do.call('rbind', est_cor_H[[i]])
+
+est_cor_H <- 
+  lapply(est_cor_H, FUN = 
+           function(z) {
+             
+             z$dat <- as.factor(z$dat)
+             z |> 
+               group_by(key, dat) |> 
+               transmute(mu = mean(value), 
+                         li = quantile(value, 0.025),
+                         ls = quantile(value, 0.975), 
+                         x = x, 
+                         sex = sex) |> 
+               unique()
+             
+           })
+
+est_cor_H <- do.call('rbind', est_cor_H)
+
+est_cor_H$sex <- ifelse(est_cor_H$sex == 'H', 'female', 'male')
+colnames(est_cor_H)[1] <- 'species'
+
+ggplot() +
+  geom_point(data = d, aes(body_mass_g, flipper_length_mm, color = sex)) +
+  geom_line(data = est_cor_H, 
+            aes(x, mu, color = sex)) +
+  geom_ribbon(data = est_cor_H, 
+              aes(x, mu, fill = sex, 
+                  ymin = li, ymax = ls), alpha = 0.3) +
+  facet_wrap(~ species)
+
+d1_ <- unique(d[, c("species", "year", "island", "sex")])
+
+d1 <- apply(d1_, 2, FUN = 
+              function(x) {
+                
+                x <- factor(x, labels = 1:length(unique(x)))
+                as.integer(x)
+                
+              })
+
+d1 <- as_tibble(d1)
+
+sigmas <- m1$draws(format = 'df')
+sigmas <- sigmas[, grepl('sigma', colnames(sigmas))]
+
+est_islas_year <- lapply(1:nrow(d1), FUN = 
+                           function(x) {
+                             
+                             se <- d1$sex[[x]]
+                             s_b <- ifelse(se == 1, d1$species[[x]] + 0, 
+                                           d1$species[[x]] + 3)
+                             is <- d1$island[[x]]
+                             y <- d1$year[[x]]
+                             
+                             
+                             p <- with(post_m1, 
+                                       {
+                                         spp[, s_b, drop = T] + 
+                                           I[, is, drop = T] +
+                                           Y[, y, drop = T] +
+                                           beta[, s_b, drop = T]*mean(d$body_mass_g)
+                                         
+                                       })
+                             
+                             p <- rnorm(1e3, p, sigmas$sigma)
+                             
+                             cbind(tibble(val = p), d1_[x, ])
+                             
+                           })
+
+est_islas_year <- as_tibble(do.call('rbind', est_islas_year))
+
+est_islas_year |> 
+  ggplot() +
+  geom_boxplot(aes(year, val, fill = species)) +
+  facet_wrap( ~ island + sex) +
+  labs(x = NULL, y = 'Longitud aleta (mm)') +
+  theme_bw() +
+  theme(legend.position = 'top')
+
+sigmas <- sigmas[, c(1, 3)]
+colnames(sigmas) <- c('sigma\n(island)', 'sigma\n(year)')
+gather(sigmas) |> 
+  ggplot() +
+  geom_density(aes(value, fill = key), alpha = 0.5) +
+  theme(legend.position = 'top')
+
+
+# ==============
+
+library(lterdatasampler)
+
+data(and_vertebrates)
+
+?and_vertebrates
+
+summary()
 
 

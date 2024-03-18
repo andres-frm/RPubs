@@ -904,6 +904,9 @@ data(and_vertebrates)
 
 ?and_vertebrates
 
-summary()
+d <- and_vertebrates
+
+d %$% aggregate(length_1_mm ~ species + year + 
+                  sitecode + section + unittype, FUN = length)
 
 

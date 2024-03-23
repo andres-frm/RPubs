@@ -1,5 +1,5 @@
 paquetes <- c("rethinking", "tidyverse", "magrittr", 'patchwork', 'rstan',
-              'cmdstanr', 'loo', 'MASS', 'ellipse')
+              'cmdstanr', 'loo', 'MASS', 'ellipse', 'palmerpenguins')
 sapply(paquetes, library, character.only = T)
 
 options(mc.cores = parallel::detectCores())
@@ -55,12 +55,6 @@ d <- list(cafe=cafe_id , afternoon=afternoon , wait=wait, N = length(cafe_id),
           N_cafes = N_cafes)
 
 
-plot(density(
-  rlkjcorr(1e3, 
-           K=2, 
-           eta=2 ) 
-))
-
 par(mfrow = c(3, 3), mar = c(4, 4, 1, 1))
 
 for (i in 1:9) {
@@ -75,21 +69,6 @@ for (i in 1:9) {
 }
 
 par(mfrow = c(1, 1))
-
-m <- 
-  ulam(
-    alist(
-      wait ~ normal( mu , sigma ),
-      mu <- a_cafe[cafe] + b_cafe[cafe]*afternoon,
-      c(a_cafe,b_cafe)[cafe] ~ multi_normal( c(a,b) , Rho , sigma_cafe ),
-      a ~ normal(5,2),
-      b ~ normal(-1,0.5),
-      sigma_cafe ~ exponential(1),
-      sigma ~ exponential(1),
-      Rho ~ lkj_corr(2)
-    ) , data=d , chains=4 , cores=4 , log_lik = T)
-
-stancode(m)
 
 cat(file = 'multilevel_mods_II/par_corr_eg.stan', 
     "
@@ -172,7 +151,7 @@ plot(density(d$wait), ylim = c(0, 0.4), main = '')
 for (i in 1:100) lines(density(ppcheck_eg[i, ]), lwd = 0.1)
 lines(density(d$wait), col = 'red', lwd = 3)
 
-post_eg <- m_eg$draws(variables = c('alpha', 'beta', 'R', 'sigma', 'sigma', 
+post_eg <- m_eg$draws(variables = c('alpha', 'beta', 'R', 'sigma', 
                                     'sigma_cafe', 'mu_bar'), 
                       format = 'df')
 
@@ -427,7 +406,6 @@ m_eg3 <-
   )
 
 out_eg3 <- m_eg3$summary()
-m_eg3$loo()
 mod_diagnostics(m_eg3, out_eg3)
 
 
@@ -641,7 +619,7 @@ source('functions_mod_diagnostics.R')
 
 d <- na.omit(penguins)
 
-d <- d |> select(species, year, island, sex, flipper_length_mm, body_mass_g)
+d <- d |> dplyr::select(species, year, island, sex, flipper_length_mm, body_mass_g)
 
 d$year <- as.factor(d$year)
 
@@ -807,6 +785,8 @@ est_cor_H <- lapply(1:2, FUN =
                       })
 
 for (i in 1:2) est_cor_H[[i]] <- do.call('rbind', est_cor_H[[i]])
+
+length(est_cor_H)
 
 est_cor_H <- 
   lapply(est_cor_H, FUN = 

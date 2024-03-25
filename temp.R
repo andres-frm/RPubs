@@ -311,8 +311,9 @@ sigmas_parche <-
 
 mu_parche <- c(mean(post$tau), mean(post$beta))
 
-post %$% plot(tau, beta)
-
+par(mfrow = c(1, 2))
+post %$% plot(tau, beta, xlab = expression(tau), 
+              ylab = expression(beta))
 for (i in seq(0.1, 0.9, by = 0.2))
   lines(ellipse(sigmas_parche, centre = mu_parche, level = i), lwd = 0.5)
 

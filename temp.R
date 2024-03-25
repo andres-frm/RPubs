@@ -31,33 +31,33 @@ mat_VC_tau <- diag(sig_tau) %*% mat_VC_tau %*% diag(sig_tau)
 
 par(mfrow = c(1, 2), mar = c(4, 4, 1, 1))
 set.seed(123)
-nidos <- rmvnorm(100, mu1, sigma = mat_VC_alpha)
+nidos <- rmvnorm(1000, mu1, sigma = mat_VC_alpha)
 plot(nidos[, 1], nidos[, 2], xlab = expression(alpha), 
      ylab = expression(beta))
 for (i in seq(0.1, 0.9, by = 0.1)) {
-  l <- ellipse(mat_VC_alpha, center = mu1, level = i)
+  l <- ellipse(mat_VC_alpha, centre = mu1, level = i)
   lines(l[, 1], l[, 2], col = 'cyan4')
 }
 
 set.seed(123)
-parche <- rmvnorm(100, mu2, sigma = mat_VC_tau)
+parche <- rmvnorm(1000, mu2, sigma = mat_VC_tau)
 plot(parche[, 1], parche[, 2], xlab = expression(tau), 
      ylab = expression(beta))
 for (i in seq(0.1, 0.9, by = 0.1)) {
-  l <- ellipse(mat_VC_tau, center = mu2, level = i)
+  l <- ellipse(mat_VC_tau, centre = mu2, level = i)
   lines(l[, 1], l[, 2], col = 'cyan4')
 }
 par(mfrow = c(1, 1))
 
-plot(density(rmvnorm(1e4, mu1, sigma = mat_VC_alpha)[, 2]), 
+plot(density(rmvnorm(1e3, mu1, sigma = mat_VC_alpha)[, 2]), 
      main = '', xlab = expression(beta))
-lines(density(rmvnorm(1e4, mu2, sigma = mat_VC_tau)[, 2]))
+lines(density(rmvnorm(1e3, mu2, sigma = mat_VC_tau)[, 2]))
 
-N <- 100
+N <- 1000
 set.seed(123)
 nidada <- rpois(N, 10)
 nido_id <- 1:N
-parches <- rep(1:10, each = 10 , length.out = N)
+parches <- rep(1:20, each = 10 , length.out = N)
 bosque <- rep(0:1, each = 5, length.out = N)
 alpha_nido <- nidos[, 1]
 tau_parche <- parche[, 1]
@@ -70,9 +70,9 @@ huevos <- rbinom(N, size = nidada, prob = mu)
 dat <- 
   list(
     N = N, 
-    N_parche = 10,
+    N_parche = 20,
     N_bosque = 2,
-    N_nidos = 100,
+    N_nidos = 1000,
     nido = nido_id,
     nidada = nidada,
     bosque = bosque, 
@@ -87,7 +87,7 @@ cat(file = 'multilevel_mods_II/eg_cov_par1.stan',
       int N_parche;
       int N_bosque;
       int N_nidos;
-      array[N] int nido_id;
+      array[N] int nido;
       array[N] int nidada;
       array[N] int bosque;
       array[N] int huevos;
@@ -100,15 +100,17 @@ cat(file = 'multilevel_mods_II/eg_cov_par1.stan',
       vector<lower = 0>[N_bosque] sigma_parche;
       vector[N_bosque] tau_mu;
     
-      array[N_nidos] vector [N_bosque] alpha;
+      matrix[N_nidos, N_bosque] M_alpha;
       corr_matrix[N_bosque] rho_nido;
       vector<lower = 0>[N_bosque] sigma_nido;
-    
     }
     
     transformed parameters{
       vector[N_parche] tau;
       vector[N_parche] beta;
+      vector[N_nidos] alpha;
+      
+      alpha = M_alpha[, 1];
       tau = M_tau[, 1];
       beta = M_tau[, 2];
     }
@@ -117,25 +119,233 @@ cat(file = 'multilevel_mods_II/eg_cov_par1.stan',
       vector[N] p;
       sigma_parche ~ exponential(1);
       tau_mu ~ normal(0, 1);
+      rho_parche ~ lkj_corr(1);
       sigma_nido ~ exponential(1);
-      rho_parche ~ lkj_corr(2);
-      rho_nido ~ lkj_corr(2);
+      rho_nido ~ lkj_corr(1);
       for (i in 1:N_parche) M_tau[i, :] ~ multi_normal(tau_mu, 
                                                        quad_form_diag(rho_parche, 
                                                        sigma_parche));
-      alpha ~ multi_normal(rep_vector(0, N_bosque), quad_form_diag(rho_nido, sigma_nido));
+      for (i in 1:N_nidos) M_alpha[i, :] ~ multi_normal(rep_vector(0, N_bosque),
+                                                       quad_form_diag(rho_nido,
+                                                       sigma_nido));
     
       for (i in 1:N) {
-        p[i] = alpha[nido_id[i]] + tau[parche[i]] + beta[parche[i]]*bosque[i];
+        p[i] = alpha[nido[i]] + tau[parche[i]] + beta[parche[i]]*bosque[i];
         p[i] = inv_logit(p[i]);
       }
       
       huevos ~ binomial(nidada, p);
     }
+    
+    generated quantities{
+      vector[N] log_lik;
+      vector[N] p;
+      array[N] int ppcheck;
+    
+      for (i in 1:N) {
+        p[i] = alpha[nido[i]] + tau[parche[i]] + beta[parche[i]]*bosque[i];
+        p[i] = inv_logit(p[i]);
+      }
+    
+      for (i in 1:N) log_lik[i] = binomial_lpmf(huevos[i] | nidada[i], p[i]);
+    
+      ppcheck = binomial_rng(nidada, p);
+    }
     ')
 
 file <- paste(getwd(), '/multilevel_mods_II/eg_cov_par1.stan', sep = '')
 fit <- cmdstan_model(file, compile = T)
+
+m <- 
+  fit$sample(
+    data = dat,
+    iter_sampling = 4e3,
+    iter_warmup = 500, 
+    thin = 3, 
+    chains = 3, 
+    parallel_chains = 3, 
+    refresh = 200, 
+    seed = 123
+  )
+
+m_out <- m$summary()
+
+m_out[m_out$rhat > 1.01, ] |> print(n = 555)
+
+mod_diagnostics(m, m_out)
+
+# non centered version
+
+cat(file = 'multilevel_mods_II/eg_cov_par2.stan', 
+    "
+    data{
+      int N;
+      int N_parche;
+      int N_bosque;
+      int N_nidos;
+      array[N] int nido;
+      array[N] int nidada;
+      array[N] int bosque;
+      array[N] int huevos;
+      array[N] int parche;
+    }
+    
+    parameters{
+      matrix[N_bosque, N_parche] Z_tau;
+      cholesky_factor_corr[N_bosque] rho_tau;
+      vector<lower = 0>[N_bosque] sigma_tau;
+      vector[N_bosque] tau_bar;
+    
+      matrix[N_bosque, N_nidos] Z_alpha;
+      cholesky_factor_corr[N_bosque] rho_alpha;
+      vector<lower = 0>[N_bosque] sigma_alpha;
+      vector[N_bosque] alpha_bar;
+    }
+    
+    transformed parameters{
+      vector[N_nidos] alpha;
+      vector[N_nidos] beta2;
+      vector[N_parche] tau;
+      vector[N_parche] beta;
+      matrix[N_nidos, N_bosque] M_alpha;
+      matrix[N_parche, N_bosque] M_tau;
+      M_alpha = (diag_pre_multiply(sigma_alpha, rho_alpha) * Z_alpha)';
+      M_tau = (diag_pre_multiply(sigma_tau, rho_tau) * Z_tau)';
+      alpha = alpha_bar[1] + M_alpha[, 1];
+      beta2 = alpha_bar[2] + M_alpha[, 2];
+      tau = tau_bar[1] + M_tau[, 1];
+      beta = tau_bar[2] + M_tau[, 2];
+    }
+    
+    model{
+      vector[N] p;
+      vector[N] p2;
+      sigma_alpha ~ exponential(1);
+      sigma_tau ~ exponential(1);
+      tau_bar ~ normal(0, 1);
+      alpha_bar ~ normal(0, 1);
+      to_vector(Z_alpha) ~ normal(0, 1);
+      to_vector(Z_tau) ~ normal(0, 1);
+      rho_alpha ~ lkj_corr_cholesky(2);
+      rho_tau ~ lkj_corr_cholesky(2);
+    
+      for (i in 1:N) {
+        p[i] = alpha[nido[i]] + tau[parche[i]] + beta[parche[i]]*bosque[i];
+        p[i] = inv_logit(p[i]);
+      }
+      
+      huevos ~ binomial(nidada, p);
+    
+    for (i in 1:N) {
+        p2[i] = alpha[nido[i]] + tau[parche[i]] + beta2[parche[i]]*bosque[i];
+        p2[i] = inv_logit(p2[i]);
+      }
+      
+      huevos ~ binomial(nidada, p);
+    
+    }
+    
+    generated quantities{
+      vector[N] log_lik;
+      vector[N] p;
+      array[N] int ppcheck;
+      matrix[N_bosque, N_bosque] rho_parche;
+      matrix[N_bosque, N_bosque] rho_nido;
+      rho_parche = multiply_lower_tri_self_transpose(rho_tau);
+      rho_nido = multiply_lower_tri_self_transpose(rho_alpha);
+    
+      for (i in 1:N) {
+        p[i] = alpha[nido[i]] + tau[parche[i]] + beta[parche[i]]*bosque[i];
+        p[i] = inv_logit(p[i]);
+      }
+    
+      for (i in 1:N) log_lik[i] = binomial_lpmf(huevos[i] | nidada[i], p[i]);
+    
+      ppcheck = binomial_rng(nidada, p);
+    }
+    ")
+
+file <- paste(getwd(), '/multilevel_mods_II/eg_cov_par2.stan', sep = '')
+fit <- cmdstan_model(file, compile = T)
+
+m2 <- 
+  fit$sample(
+    data = dat,
+    iter_sampling = 4e3,
+    iter_warmup = 500, 
+    thin = 3, 
+    chains = 3, 
+    parallel_chains = 3, 
+    refresh = 200, 
+    seed = 123
+  )
+
+m2_out <- m2$summary()
+
+mod_diagnostics(m2, m2_out)
+
+ppcheck <- as.matrix(m2$draws(variables = 'ppcheck', format = 'df'))
+
+plot(density(ppcheck[1, ]), xlab = 'Huevos sobrevivientes', 
+     ylab = 'Density', main = '', lwd = 0.01, ylim = c(0, 0.12))
+for (i in 1:500) lines(density(ppcheck[i, ]), lwd = 0.1)
+lines(density(dat$huevos), col = 'red', lwd = 2)
+
+post <- m2$draws(variables = c('alpha', 'tau', 'beta', 'beta2'), format = 'df')
+post <- 
+  list(alpha = apply(post[, grep('alpha', colnames(post))], 2, mean),
+       tau = apply(post[, grep('tau', colnames(post))], 2, mean), 
+       beta = apply(post[, grep('beta\\[', colnames(post))], 2, mean), 
+       beta2 = apply(post[, grep('beta2', colnames(post))], 2, mean))
+
+rho_parche <- m2$draws(variables = c('rho_parche'), 
+                       format = 'df')
+
+sigma_parche <- m2$draws(variables = 'sigma_tau', format = 'df')
+
+sigmas_parche <- 
+  matrix(c(mean(sigma_tau$`sigma_tau[1]`)^2,
+             mean(rho$`rho_parche[2,1]`),
+             mean(rho$`rho_parche[2,1]`),
+             mean(sigma_tau$`sigma_tau[2]`)^2), ncol = 2)
+
+mu_parche <- c(mean(post$tau), mean(post$beta))
+
+post %$% plot(tau, beta)
+
+for (i in seq(0.1, 0.9, by = 0.2))
+  lines(ellipse(sigmas_parche, centre = mu_parche, level = i), lwd = 0.5)
+
+mu_nido <- c(mean(post$alpha), mean(post$beta2))
+
+sigmas_nido <- m2$draws(variables = 'sigma_alpha', format = 'df')
+sigmas_nido <- apply(sigmas_nido, 2, mean)
+
+rho_nido <- m2$draws(variables = 'rho_nido', format = 'df')
+
+sigmas_nido <- 
+  matrix(
+    c(sigmas_nido[1]^2, 
+      mean(rho_nido$`rho_nido[2,1]`), 
+      mean(rho_nido$`rho_nido[2,1]`), 
+      sigmas_nido[2]^2), ncol = 2
+  )
+
+post %$% plot(alpha, beta2, xlim = c(-2.5, 2.5), ylim = c(-2.5, 2.5))
+for (i in seq(0.1, 0.9, by = 0.2)) lines(ellipse(sigmas_nido, 
+                                                 centre = mu_nido, 
+                                                 level = i))
+
+plot(density(rho$parche$`rho_parche[2,1]`), col =4, lwd = 3, 
+     xlim = c(-1, 1))
+lines(density(rho$nido$`rho_nido[2,1]`), col =2, lwd = 3)
+
+
+
+plot(density(apply(post$alpha, 2, mean)))
+
+
+colnames(post)
 
 
 

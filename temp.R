@@ -1,10 +1,144 @@
 paquetes <- c("rethinking", "tidyverse", "magrittr", 'patchwork', 'rstan',
-              'cmdstanr', 'loo', 'MASS', 'ellipse', 'palmerpenguins')
+              'cmdstanr', 'loo', 'MASS', 'ellipse', 'palmerpenguins', 'lterdatasampler')
 sapply(paquetes, library, character.only = T)
 
 options(mc.cores = parallel::detectCores())
 
 source('functions_mod_diagnostics.R')
+
+alpha <- 0.05
+tau <- 0.1
+beta <- 1.2
+sigma_alpha <- 0.8
+sigma_tau <- 1
+sigma_beta <- 0.9
+rho_alpha_beta <- 0.005
+rho_tau_beta <- 0.8
+
+mu1 <- c(alpha, beta)
+mu2 <- c(tau, beta)
+
+cov_alpha_beta <- sigma_alpha*sigma_beta*rho_alpha_beta
+cov_tau_beta <- sigma_tau*sigma_beta*rho_tau_beta
+
+sig_alpha <- c(sigma_alpha, sigma_beta)
+mat_VC_alpha <- matrix(c(1, cov_alpha_beta, cov_alpha_beta, 1), ncol = 2)
+mat_VC_alpha <- diag(sig_alpha) %*% mat_VC_alpha %*% diag(sig_alpha)
+
+sig_tau <- c(sigma_tau, sigma_beta)
+mat_VC_tau <- matrix(c(1, cov_tau_beta, cov_tau_beta, 1), ncol = 2)
+mat_VC_tau <- diag(sig_tau) %*% mat_VC_tau %*% diag(sig_tau)
+
+par(mfrow = c(1, 2), mar = c(4, 4, 1, 1))
+set.seed(123)
+nidos <- rmvnorm(100, mu1, sigma = mat_VC_alpha)
+plot(nidos[, 1], nidos[, 2], xlab = expression(alpha), 
+     ylab = expression(beta))
+for (i in seq(0.1, 0.9, by = 0.1)) {
+  l <- ellipse(mat_VC_alpha, center = mu1, level = i)
+  lines(l[, 1], l[, 2], col = 'cyan4')
+}
+
+set.seed(123)
+parche <- rmvnorm(100, mu2, sigma = mat_VC_tau)
+plot(parche[, 1], parche[, 2], xlab = expression(tau), 
+     ylab = expression(beta))
+for (i in seq(0.1, 0.9, by = 0.1)) {
+  l <- ellipse(mat_VC_tau, center = mu2, level = i)
+  lines(l[, 1], l[, 2], col = 'cyan4')
+}
+par(mfrow = c(1, 1))
+
+plot(density(rmvnorm(1e4, mu1, sigma = mat_VC_alpha)[, 2]), 
+     main = '', xlab = expression(beta))
+lines(density(rmvnorm(1e4, mu2, sigma = mat_VC_tau)[, 2]))
+
+N <- 100
+set.seed(123)
+nidada <- rpois(N, 10)
+nido_id <- 1:N
+parches <- rep(1:10, each = 10 , length.out = N)
+bosque <- rep(0:1, each = 5, length.out = N)
+alpha_nido <- nidos[, 1]
+tau_parche <- parche[, 1]
+beta_bosque <- parche[, 2]
+mu <- alpha_nido[nido_id] + tau_parche[parches] + beta_bosque[parches]*bosque
+mu <- inv_logit(mu)
+set.seed(123)
+huevos <- rbinom(N, size = nidada, prob = mu)
+
+dat <- 
+  list(
+    N = N, 
+    N_parche = 10,
+    N_bosque = 2,
+    N_nidos = 100,
+    nido = nido_id,
+    nidada = nidada,
+    bosque = bosque, 
+    huevos = huevos,
+    parche = parches
+  )
+
+cat(file = 'multilevel_mods_II/eg_cov_par1.stan', 
+    '
+    data{
+      int N;
+      int N_parche;
+      int N_bosque;
+      int N_nidos;
+      array[N] int nido_id;
+      array[N] int nidada;
+      array[N] int bosque;
+      array[N] int huevos;
+      array[N] int parche;
+    }
+    
+    parameters{
+      matrix[N_parche, N_bosque] M_tau;
+      corr_matrix[N_bosque] rho_parche;
+      vector<lower = 0>[N_bosque] sigma_parche;
+      vector[N_bosque] tau_mu;
+    
+      array[N_nidos] vector [N_bosque] alpha;
+      corr_matrix[N_bosque] rho_nido;
+      vector<lower = 0>[N_bosque] sigma_nido;
+    
+    }
+    
+    transformed parameters{
+      vector[N_parche] tau;
+      vector[N_parche] beta;
+      tau = M_tau[, 1];
+      beta = M_tau[, 2];
+    }
+    
+    model{
+      vector[N] p;
+      sigma_parche ~ exponential(1);
+      tau_mu ~ normal(0, 1);
+      sigma_nido ~ exponential(1);
+      rho_parche ~ lkj_corr(2);
+      rho_nido ~ lkj_corr(2);
+      for (i in 1:N_parche) M_tau[i, :] ~ multi_normal(tau_mu, 
+                                                       quad_form_diag(rho_parche, 
+                                                       sigma_parche));
+      alpha ~ multi_normal(rep_vector(0, N_bosque), quad_form_diag(rho_nido, sigma_nido));
+    
+      for (i in 1:N) {
+        p[i] = alpha[nido_id[i]] + tau[parche[i]] + beta[parche[i]]*bosque[i];
+        p[i] = inv_logit(p[i]);
+      }
+      
+      huevos ~ binomial(nidada, p);
+    }
+    ')
+
+file <- paste(getwd(), '/multilevel_mods_II/eg_cov_par1.stan', sep = '')
+fit <- cmdstan_model(file, compile = T)
+
+
+
 
 a <- 3.5 # average morning wait time 
 b <- (-1) # average difference afternoon wait time
@@ -609,19 +743,13 @@ mod_diagnostics(m2, out_m2)
 #===============
 #
 
-paquetes <- c("tidyverse", "magrittr", 'patchwork', 'rstan',
-              'cmdstanr', 'loo', 'palmerpenguins')
-sapply(paquetes, library, character.only = T)
-
-options(mc.cores = parallel::detectCores())
-
-source('functions_mod_diagnostics.R')
-
 d <- na.omit(penguins)
 
 d <- d |> dplyr::select(species, year, island, sex, flipper_length_mm, body_mass_g)
 
 d$year <- as.factor(d$year)
+
+d$species_sex <- as.factor(paste(d$species, d$sex, sep = '_'))
 
 dat <- lapply(d, function(x) if(!is.double(x)) as.integer(x) else(x))
 
@@ -630,63 +758,67 @@ dat$N_spp <- max(dat$species)
 dat$N_sex <- 2
 dat$N_island <- max(dat$island)
 dat$N_year <- max(dat$year)
+dat$N_spp_sex <- max(dat$species_sex)
+
+prior_corr <- rlkjcorr(1e3, 2, eta = 5)
+
+dim(prior_corr)
+
+plot(density(prior_corr[, 2, 1]))
 
 cat(file = 'penguins_par_pool.stan', 
-    '
+    "
     data{
       int N;
-      int N_spp;
-      int N_sex;
+      int N_spp_sex;
       int N_island;
       int N_year;
       vector[N] flipper_length_mm;
       vector[N] body_mass_g;
-      array[N] int species;
+      array[N] int species_sex;
       array[N] int year;
       array[N] int island;
-      array[N] int sex;
     }
     
     parameters{
       
-      vector[N_island] z_I;
-      real mu_I;
-      real<lower = 0> sigma1;
-      matrix[N_spp, N_sex] z_spp;
-      real mu_spp;
-      real<lower = 0> sigma2;
-      vector[N_year] z_Y;
-      real mu_Y;
-      real<lower = 0> sigma3;
-      matrix[N_spp, N_sex] beta;
-      real<lower = 0> sigma;
+      matrix[N_spp_sex, N_island] z_island;  
+      cholesky_factor_corr[N_spp_sex] Rho_island;
+      vector<lower = 0>[N_spp_sex] sigma_island;
       
+      matrix[N_spp_sex, N_year] z_year;
+      cholesky_factor_corr[N_spp_sex] Rho_year;
+      vector<lower = 0>[N_spp_sex] sigma_year;
+      
+      vector[N_spp_sex] theta;
+      vector[N_spp_sex] beta;
+      real<lower = 0> sigma;
+    }
+    
+    transformed parameters{
+    
+      matrix[N_island, N_spp_sex] alpha;
+      matrix[N_year, N_spp_sex] tau;
+      alpha = (diag_pre_multiply(sigma_island, Rho_island) * z_island)';
+      tau = (diag_pre_multiply(sigma_year, Rho_year) * z_year)';
     }
     
     model{
       vector[N] mu;
-      vector[N_island] I;
-      matrix[N_spp, N_sex] spp;
-      vector[N_year] Y;
-      mu_I ~ normal(0, 1);
-      z_I ~ normal(0, 0.5);
-      mu_spp ~ normal(200, 50);
-      to_vector(z_spp) ~ normal(0, 1);
-      mu_Y ~ normal(0, 1);
-      z_Y ~ normal(0, 0.5);
-      to_vector(beta) ~ normal(1, 1);
+      sigma_island ~ exponential(1);
+      sigma_year ~ exponential(1);
+      Rho_island ~ lkj_corr_cholesky(2);
+      Rho_year ~ lkj_corr_cholesky(2);
+      to_vector(z_island) ~ normal(0, 1);
+      to_vector(z_year) ~ normal(0, 1);
+      theta ~ normal(200, 50);
+      beta ~ normal(0.5, 0.5);
       sigma ~ exponential(1);
-      sigma1 ~ exponential(1);
-      sigma2 ~ exponential(1);
-      sigma3 ~ exponential(1);
-      I = mu_I + z_I*sigma1;
-      spp = mu_spp + z_spp*sigma2;
-      Y = mu_Y + z_Y*sigma3;
-    
+     
       for (i in 1:N) {
-        mu[i] = spp[species[i], sex[i]] +  
-                I[island[i]] + Y[year[i]] + 
-                beta[species[i], sex[i]]*body_mass_g[i];
+        mu[i] = theta[species_sex[i]] +  
+                alpha[island[i], species_sex[i]] + tau[year[i], species_sex[i]] + 
+                beta[species_sex[i]]*body_mass_g[i];
       }
       
       flipper_length_mm ~ normal(mu, sigma);
@@ -694,25 +826,24 @@ cat(file = 'penguins_par_pool.stan',
     
     generated quantities{
       vector[N] log_lik;
-      vector[N] mu;
-      vector[N_island] I;
-      matrix[N_spp, N_sex] spp;
-      vector[N_year] Y;
-      I = mu_I + z_I*sigma1;
-      spp = mu_spp + z_spp*sigma2;
-      Y = mu_Y + z_Y*sigma3;
+      vector[N] mu_;
       array[N] real ppcheck;
+      matrix[N_spp_sex, N_spp_sex] Rho_isla_corr;
+      matrix[N_spp_sex, N_spp_sex] Rho_year_corr;
+      
+      Rho_isla_corr = multiply_lower_tri_self_transpose(Rho_island);
+      Rho_year_corr = multiply_lower_tri_self_transpose(Rho_year);
     
       for (i in 1:N) {
-        mu[i] = spp[species[i], sex[i]] +  
-                I[island[i]] + Y[year[i]] + 
-                beta[species[i], sex[i]]*body_mass_g[i];
+        mu_[i] = theta[species_sex[i]] +  
+                alpha[island[i], species_sex[i]] + tau[year[i], species_sex[i]] + 
+                beta[species_sex[i]]*body_mass_g[i];
       }
       
-      for (i in 1:N) log_lik[i] = normal_lpdf(flipper_length_mm[i] | mu[i], sigma);
+      for (i in 1:N) log_lik[i] = normal_lpdf(flipper_length_mm[i] | mu_[i], sigma);
     
-      ppcheck = normal_rng(mu, sigma);
-    }')
+      ppcheck = normal_rng(mu_, sigma);
+    }")
 
 file <- paste(getwd(), '/penguins_par_pool.stan', sep = '')
 
@@ -742,81 +873,95 @@ plot(NULL, main = 'Partial pooling (intercepts)',
 for (i in 1:100) lines(density(ppcheck_m1[i, ]), lwd = 0.1)
 lines(density(dat$flipper_length_mm), col = 'red')
 
-post_m1 <- m1$draws(variables = c('spp', 'I', 'Y', 'beta', 'sigma'), 
+post_m1 <- m1$draws(variables = c('theta', 'alpha', 'tau', 'beta', 'sigma'), 
                     format = 'df')
 
 post_m1 <- 
-  list(spp = post_m1[, grepl('spp', colnames(post_m1))],
-       I = post_m1[, grepl('^I', colnames(post_m1))],
-       Y = post_m1[, grepl('^Y', colnames(post_m1))], 
-       beta = post_m1[, grepl('beta', colnames(post_m1))])
+  list(spp = post_m1[, grepl('theta', colnames(post_m1))],
+       I = post_m1[, grepl('^alpha', colnames(post_m1))],
+       Y = post_m1[, grepl('^tau', colnames(post_m1))], 
+       beta = post_m1[, grepl('beta', colnames(post_m1))], 
+       sigma = post_m1[, grepl('sigma', colnames(post_m1))])
 
 x_seq <- seq(min(dat$body_mass_g), max(dat$body_mass_g), length.out = 100)
 
 sex <- c('H', 'M')
-vars <- list(x = 1:3, x1 = 4:6)
 
-est_cor_H <- lapply(1:2, FUN = 
-                      function(i) {
-                        
-                        lapply(1:100, FUN = 
-                                 function(x) {
+post_m1$sigma$sigma
+colnames(post_m1$spp) <- levels(d$species_sex)
+
+nombres <- colnames(post_m1$spp)
+
+est_cor <- lapply(1:ncol(post_m1$spp), FUN = 
+                    function(i) {
+                      
+                      df <- 
+                        sapply(x_seq, FUN = 
+                                 function(z) {
                                    
-                                   df <- 
-                                     sapply(vars[[i]], FUN = 
-                                              function(z) {
-                                                
-                                                post_m1$spp[, z] + # hembras
-                                                  apply(post_m1$I, 1, mean) +
-                                                  apply(post_m1$Y, 1, mean) +
-                                                  post_m1$beta[, z, drop = T]*x_seq[x]
-                                                
-                                              })
-                                   df <- as_tibble(df)
-                                   colnames(df) <- levels(d$species)
-                                   df <- gather(df)
-                                   df$sex <- sex[i]
-                                   df$x <- x_seq[x]
-                                   df$dat <- x
-                                   df
+                                   post_m1$spp[, i, drop = T] + 
+                                     apply(post_m1$I, 1, mean) +
+                                     apply(post_m1$Y, 1, mean) +
+                                     post_m1$beta[, i, drop = T]*z
                                    
                                  })
-                        
-                      })
+                      
+                      df <- do.call('rbind',
+                                    apply(df, 2, FUN = 
+                                            function(j) {
+                                              tibble(mu_est = mean(j), 
+                                                     li_est = quantile(j, 0.025), 
+                                                     ls_est = quantile(j, 0.975))
+                                            }, simplify = 'list'))
+                      
+                      df_pred <- 
+                        sapply(x_seq, FUN = 
+                                 function(z) {
+                                   
+                                   mu <- post_m1$spp[, i, drop = T] + 
+                                     apply(post_m1$I, 1, mean) +
+                                     apply(post_m1$Y, 1, mean) +
+                                     post_m1$beta[, i, drop = T]*z
+                                   
+                                   rnorm(1e3, mu, post_m1$sigma$sigma)
+                                   
+                                 })
+                      
+                      df_pred <- do.call('rbind',
+                                    apply(df_pred, 2, FUN = 
+                                            function(j) {
+                                              tibble(li_pred = quantile(j, 0.025), 
+                                                     ls_pred = quantile(j, 0.975))
+                                            }, simplify = 'list'))
+                      
+                      df <- cbind(df, df_pred)
+                      df$x <- x_seq
+                      df$spp <- gsub('^(.*)(_)(.*)$', '\\1', nombres[i])
+                      df$sex <- gsub('^(.*)(_)(.*)$', '\\3', nombres[i])
+                      df
 
-for (i in 1:2) est_cor_H[[i]] <- do.call('rbind', est_cor_H[[i]])
+                    })
 
-length(est_cor_H)
+est_cor <- do.call('rbind', est_cor)
 
-est_cor_H <- 
-  lapply(est_cor_H, FUN = 
-           function(z) {
-             
-             z$dat <- as.factor(z$dat)
-             z |> 
-               group_by(key, dat) |> 
-               transmute(mu = mean(value), 
-                         li = quantile(value, 0.025),
-                         ls = quantile(value, 0.975), 
-                         x = x, 
-                         sex = sex) |> 
-               unique()
-             
-           })
-
-est_cor_H <- do.call('rbind', est_cor_H)
-
-est_cor_H$sex <- ifelse(est_cor_H$sex == 'H', 'female', 'male')
-colnames(est_cor_H)[1] <- 'species'
+est_cor <- as_tibble(est_cor)
+colnames(est_cor)[7] <- 'species'
 
 ggplot() +
   geom_point(data = d, aes(body_mass_g, flipper_length_mm, color = sex)) +
-  geom_line(data = est_cor_H, 
-            aes(x, mu, color = sex)) +
-  geom_ribbon(data = est_cor_H, 
-              aes(x, mu, fill = sex, 
-                  ymin = li, ymax = ls), alpha = 0.3) +
-  facet_wrap(~ species)
+  geom_line(data = est_cor, 
+            aes(x, mu_est, color = sex)) +
+  geom_ribbon(data = est_cor, 
+              aes(x, mu_est, fill = sex, 
+                  ymin = li_pred, ymax = ls_pred), alpha = 0.3) +
+  facet_wrap(~ species) +
+  theme_bw() +
+  labs(x = 'Masa corporal (g)', y = 'Longitud de la aleta') +
+  theme(
+    panel.grid = element_blank(),
+    legend.position = 'top',
+    legend.title = element_blank()
+  )
 
 d1_ <- unique(d[, c("species", "year", "island", "sex")])
 
@@ -832,6 +977,7 @@ d1 <- as_tibble(d1)
 
 sigmas <- m1$draws(format = 'df')
 sigmas <- sigmas[, grepl('sigma', colnames(sigmas))]
+
 
 est_islas_year <- lapply(1:nrow(d1), FUN = 
                            function(x) {
@@ -876,9 +1022,68 @@ gather(sigmas) |>
   theme(legend.position = 'top')
 
 
+rho_isla <- m1$draws(variables = 'Rho_isla_corr', format = 'df')
+rho_year <- m1$draws(variables = 'Rho_year_corr', format = 'df')
+
+rho_isla <- lapply(2:6, FUN = 
+                     function(i) {
+                       
+                       df <- sapply(i:6, FUN = 
+                                      function(j) {
+                                        
+                                        rho_isla[, grep(paste('^(.*)', i-1, ',', j,'.$', sep = ''), 
+                                                        colnames(rho_isla)), drop = T]
+                                        
+                                      })
+                       name <- i:6
+                       df <- as_tibble(df)
+                       
+                       for (z in seq_along(name)) colnames(df)[z] <- 
+                         paste('rho', i-1, name[z], sep = '_')
+                       df
+                     })
+rho_isla <- as_tibble(do.call('cbind', rho_isla))
+
+rho_year <- lapply(2:6, FUN = 
+                     function(i) {
+                       
+                       df <- sapply(i:6, FUN = 
+                                      function(j) {
+                                        
+                                        rho_year[, grep(paste('^(.*)', i-1, ',', j,'.$', sep = ''), 
+                                                        colnames(rho_year)), drop = T]
+                                        
+                                      })
+                       name <- i:6
+                       df <- as_tibble(df)
+                       
+                       for (z in seq_along(name)) colnames(df)[z] <- 
+                         paste('rho', i-1, name[z], sep = '_')
+                       df
+                     })
+rho_year <- as_tibble(do.call('cbind', rho_year))
+  
+rho_isla
+par(mfrow = c(1, 2), mar = c(4, 4, 1, 1))
+plot(NULL, xlim = c(-1, 1), ylim = c(0, 1.5), xlab = expression('Rho'['isla']), ylab = 'Density')
+for (i in 1:ncol(rho_isla)) {
+  lines(density(rho_isla[, i, drop = T]), col = i)
+  abline(v = mean(rho_isla[, i, drop = T]), lty = 3, col = i)
+}
+
+plot(NULL, xlim = c(-1, 1), ylim = c(0, 1.5), xlab = expression('Rho'['year']), ylab = 'Density')
+for (i in 1:ncol(rho_year)) {
+  lines(density(rho_year[, i, drop = T]), col = i)
+  abline(v = mean(rho_year[, i, drop = T]), lty = 3, col = i)
+}
+
+
+
+
+
 # ==============
 
-library(lterdatasampler)
+
 
 data(and_vertebrates)
 

@@ -1,0 +1,245 @@
+---
+title: "Introduccion modelos jerárquicos (II)"
+format: 
+  html:
+    theme: 
+      light: journal
+      dark: [journal, theme-dark.scss]
+    toc: true
+    toc-depth: 10
+    toc-expand: 10
+    toc-title: "Tabla de contenido"
+    toc-location: left
+    embed-resources: true
+number-sections: true
+number-depth: 10
+editor: visual
+date-format: full 
+date-modified: now
+mainfont: Times New Roman
+code-fold: false
+code-overflow: scroll
+code-line-numbers: true
+code-copy: true
+---
+
+```{r, echo=TRUE, results='hide',  warning = F, message = F}
+
+knitr::opts_chunk$set(echo = TRUE, warning = F, message = F)
+
+paquetes <- c("rethinking", "tidyverse", "magrittr", 'patchwork',
+              'cmdstanr', 'loo', "MASS", 'ellipse')
+
+sapply(paquetes, library, character.only = T)
+
+options(mc.cores = parallel::detectCores())
+
+source('functions_mod_diagnostics.R')
+
+```
+
+En el [capítulo anterior](https://rpubs.com/andresfeli/multilevel_I) expuse cómo los modelos jerárquicos usan la información disponible en cada agrupamiento (*cluster*) de datos para generar estimaciones más precisas de los parámetros (*partial pooling*). Presenté las ventajas de esta aproximación, y su utilidad cuando trabajamos con observaciones desbalanceadas entre grupos. Lo que suponía considerar distribuciones de probabilidad de la población de parámetros (*previa adaptativa*), hiper previas (*distribuciones previas de las previas*) y la reparametrización de los modelos para para mejorar la eficiencia computacional y la convergencia de las cadenas. Bien, en esta sección aumentaremos el nivel de abstracción. Emplearemos *partial pooling* para cruzar la información ya no solo entre *clusters*, sino también entre parámetros. Este método aprovecha la covariación entre parámetros para exprimir la información en los datos y es la base para extender los modelos jerárquicos a áreas más especializadas (e.g. modelos filogenéticos, modelos espacio-estado, análisis de redes).
+
+El material de esta sección es avanzado, requiere la revisión del [capítulo anterior](https://rpubs.com/andresfeli/multilevel_I), algunas nociones adicionales de [programación en `Stan`]() y mucha paciencia. Si usted es una persona con capacidades intelectuales convencionales, igual que yo, el entendimiento y la intuición para ajustar este tipo de modelos solo ocurrirá con la repetición y práctica. Comencemos:
+
+# Parámetros, matrices y covariación
+
+Acabo de mencionar que este tipo de modelos aprovecha la covariación entre parámetros para intercambiar información. En este caso, el modelo emplea un *vector de promedios* para cada parámetros --cada promedio es en realidad una distribución de probabilidad, esto es Bayes-- y una *matriz de varianza-covarianza* para parametrizar una *distribución normal multivariada* que asocia los parámetros y realizar su estimación. Veamos en qué consiste: 
+
+```{r eval=FALSE}
+data(bangladesh)
+d <- bangladesh
+
+d$district_id <- as.integer(as.factor(d$district))
+
+colnames(d)
+
+dat <- 
+  list(
+    anticonc = d$use.contraception,
+    urbano = as.integer(ifelse(d$urban == 1, 1, 2)),
+    distrito = d$district_id,
+    edad = d$age.centered,
+    N = nrow(d),
+    N_distrito = length(unique(d$district_id)),
+    N_urbano = 2
+  )
+
+cat(file = 'multilevel_mods_II/corr_par1.stan', 
+    '
+    data{
+      int N;
+      int N_distrito;
+      int N_urbano;
+      array[N] int anticonc;
+      array[N] int distrito;
+      array[N] int urbano;
+      //vector[N] edad;
+    }
+    
+    parameters{
+      matrix[N_distrito, N_urbano] v;
+      vector[2] alpha_bar;
+      corr_matrix[2] Rho;
+      vector<lower = 0>[2] sigma;
+    }
+    
+    transformed parameters {
+      vector[N_distrito] alpha;
+      vector[N_distrito] beta;
+      alpha = v[, 1];
+      beta = v[, 2];
+    }
+    
+    model{
+      vector[N] p;
+      alpha_bar ~ normal(0, 1);
+      Rho ~ lkj_corr(4);
+      sigma ~ exponential(1);
+      
+      for (i in 1:N_distrito) v[i,:] ~ multi_normal(alpha_bar, quad_form_diag(Rho, sigma));
+      
+      for (i in 1:N) {
+        p[i] = alpha[distrito[i]] + beta[distrito[i]]*urbano[i]; 
+        p[i] = inv_logit(p[i]);
+      }
+    
+      anticonc ~ binomial(1, p);
+    
+    }
+    
+    generated quantities{
+      vector[N] log_lik;
+      vector[N] prob;
+      array[N] int sim;
+
+      for (i in 1:N) {
+        prob[i] = alpha[distrito[i]] + beta[distrito[i]]*urbano[i];
+        prob[i] = inv_logit(prob[i]);
+      }
+
+      for (i in 1:N) log_lik[i] = binomial_lpmf(anticonc[i] | 1, prob[i]);
+    
+      sim = binomial_rng(1, prob);
+}
+    ')
+
+
+file <- paste(getwd(), '/multilevel_mods_II/corr_par1.stan', sep = '')
+
+fit_corr_par1 <- cmdstan_model(file, compile = T)
+
+m1 <- 
+  fit_corr_par1$sample(
+    data = dat,
+    iter_sampling = 4e3,
+    iter_warmup = 500,
+    parallel_chains = 3, 
+    chains = 3,
+    thin = 3,
+    seed = 123,
+    refresh = 500
+  )
+
+
+(out_m1 <- m1$summary())
+out_m1 |> print(n = 249)
+
+par(mfrow = c(3, 3), mar = c(4, 4, 1, 1))
+for (i in 1:9) trace_plot(m1, out_m1$variable[i], 3)
+par(mfrow = c(1, 1))
+
+mod_diagnostics(m1, out_m1)
+
+
+
+cat(file = "multilevel_mods_II/corr_par2.stan", 
+    "
+    data{
+      int N;
+      int N_distrito;
+      int N_urbano;
+      array[N] int anticonc;
+      array[N] int distrito;
+      array[N] int urbano;
+      //vector[N] edad;
+    }
+    
+    parameters{
+      matrix[N_urbano, N_distrito] Z;
+      vector[2] alpha_bar;
+      cholesky_factor_corr[2] L_Rho;
+      vector<lower = 0>[2] sigma;
+    }
+    
+    transformed parameters {
+      vector[N_distrito] alpha;
+      vector[N_distrito] beta;
+      matrix[N_distrito, N_urbano] v;
+      v = (diag_pre_multiply(sigma, L_Rho) * Z)';
+      alpha = alpha_bar[1] + v[, 1];
+      beta = alpha_bar[2] + v[, 2];
+    }
+    
+    model{
+      vector[N] p;
+      alpha_bar ~ normal(0, 1);
+      sigma ~ exponential(1);
+      L_Rho ~ lkj_corr_cholesky(4);
+      to_vector(Z) ~ normal(0, 1);
+      
+      for (i in 1:N) {
+        p[i] = alpha[distrito[i]] + beta[distrito[i]]*urbano[i];
+        p[i] = inv_logit(p[i]);
+      }
+      
+      anticonc ~ binomial(1, p);
+    }
+    
+    generated quantities{
+      vector[N] log_lik;
+      array[N] int sim;
+      vector[N] p;
+      matrix[2, 2] Rho;
+      Rho = multiply_lower_tri_self_transpose(L_Rho);
+      
+      for (i in 1:N) {
+        p[i] = alpha[distrito[i]] + beta[distrito[i]]*urbano[i];
+        p[i] = inv_logit(p[i]);
+      }
+      
+      for (i in 1:N) log_lik[i] = binomial_lpmf(anticonc[i] | 1, p[i]);
+    
+      sim = binomial_rng(1, p);
+    }
+    ")
+
+file <- paste(getwd(), '/multilevel_mods_II/corr_par2.stan', sep = '')
+
+fit_m2 <- cmdstan_model(file, compile = T)
+
+m2 <- 
+  fit_m2$sample(
+    data = dat,
+    chains = 3,
+    parallel_chains = 3, 
+    iter_sampling = 1e4,
+    iter_warmup = 500,
+    thin = 3,
+    refresh = 500, 
+    seed = 123
+  )
+
+out_m2 <- m2$summary()
+
+par(mfrow = c(3, 3), mar = c(4, 4, 1, 1))
+for (i in 1:9) trace_plot(m2, out_m2$variable[i], 3)
+par(mfrow = c(1, 1))
+
+mod_diagnostics(m2, out_m2)
+
+
+```
+
+
+

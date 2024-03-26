@@ -1,5 +1,5 @@
 ---
-title: "Introduccion modelos jerárquicos (II)"
+title: "Introducción modelos jerárquicos (II)"
 format: 
   html:
     theme: 
@@ -38,13 +38,83 @@ source('functions_mod_diagnostics.R')
 
 ```
 
-En el [capítulo anterior](https://rpubs.com/andresfeli/multilevel_I) expuse cómo los modelos jerárquicos usan la información disponible en cada agrupamiento (*cluster*) de datos para generar estimaciones más precisas de los parámetros (*partial pooling*). Presenté las ventajas de esta aproximación, y su utilidad cuando trabajamos con observaciones desbalanceadas entre grupos. Lo que suponía considerar distribuciones de probabilidad de la población de parámetros (*previa adaptativa*), hiper previas (*distribuciones previas de las previas*) y la reparametrización de los modelos para para mejorar la eficiencia computacional y la convergencia de las cadenas. Bien, en esta sección aumentaremos el nivel de abstracción. Emplearemos *partial pooling* para cruzar la información ya no solo entre *clusters*, sino también entre parámetros. Este método aprovecha la covariación entre parámetros para exprimir la información en los datos y es la base para extender los modelos jerárquicos a áreas más especializadas (e.g. modelos filogenéticos, modelos espacio-estado, análisis de redes).
+En el [capítulo anterior](https://rpubs.com/andresfeli/multilevel_I) expuse cómo los modelos jerárquicos usan la información disponible en cada agrupamiento (*cluster*) de datos para generar estimaciones más precisas de los parámetros (*partial pooling*). Presenté las ventajas de esta aproximación, y su utilidad cuando trabajamos con observaciones desbalanceadas entre grupos. usar esta aproximación suponía considerar distribuciones de probabilidad de la población de parámetros (*previa adaptativa*), hiper previas (*distribuciones previas de las previas*) y la reparametrización de los modelos para para mejorar la eficiencia computacional y la convergencia de las cadenas. Bien, en esta sección aumentaremos el nivel de abstracción. Emplearemos *partial pooling* para cruzar la información ya no solo entre *clusters*, sino también entre parámetros. Este método aprovecha la covariación entre parámetros para extraer una mayor cantidad de información de los datos, y es la base para extender los modelos jerárquicos a áreas más especializadas (e.g. modelos filogenéticos, modelos espacio-estado, análisis de redes).
 
-El material de esta sección es avanzado, requiere la revisión del [capítulo anterior](https://rpubs.com/andresfeli/multilevel_I), algunas nociones adicionales de [programación en `Stan`]() y mucha paciencia. Si usted es una persona con capacidades intelectuales convencionales, igual que yo, el entendimiento y la intuición para ajustar este tipo de modelos solo ocurrirá con la repetición y práctica. Comencemos:
+::: {.border}
 
-# Parámetros, matrices y covariación
+El material de esta sección es avanzado, requiere la revisión del [capítulo anterior](https://rpubs.com/andresfeli/multilevel_I), algunas nociones adicionales de [programación en `Stan`]() y mucha paciencia. Si usted es una persona con capacidades intelectuales convencionales, igual que yo, el entendimiento y la intuición para ajustar este tipo de modelos solo ocurrirá con la repetición y práctica.
 
-Acabo de mencionar que este tipo de modelos aprovecha la covariación entre parámetros para intercambiar información. En este caso, el modelo emplea un *vector de promedios* para cada parámetros --cada promedio es en realidad una distribución de probabilidad, esto es Bayes-- y una *matriz de varianza-covarianza* para parametrizar una *distribución normal multivariada* que asocia los parámetros y realizar su estimación. Veamos en qué consiste: 
+:::
+
+
+# Parámetros correlacionados y distribución normal multivariada
+
+Acabo de mencionar que este tipo de modelos aprovecha la covariación entre parámetros para intercambiar información y producir mejores estimaciones. En este caso, el modelo emplea un *vector de promedios* para cada parámetros --cada promedio es en realidad una distribución de probabilidad-- y una *matriz de varianza-covarianza* para parametrizar una *distribución normal multivariada* que asocia los parámetros y realizar su estimación. Veamos en qué consiste:
+
+Supongamos los parametros $\theta \sim normal(\mu=2, \sigma = 1.2)$ y $\psi \sim normal(\mu = 1.1, \sigma=0.8)$, cuyo coeficiente de correlación $r = 0.7$. Para generar la distribución normal multivariada que relaciona ambos parámetros requerimos:
+
+i. Vector de promedios $\mu = [\mu_\theta, \mu_\psi]$:
+```{r}
+theta <- 2
+psi <- 1.1
+mu <- c(theta, psi)
+```
+
+ii. Matriz de varianza-covarianza. Esta, es una matriz cuadrada cuya diagonal corresponde a varianza de los parámetros y mientras (i.e. $\sigma^2_\theta$, $\sigma^2_\psi$) los demás elementos de la matriz corresponden a la covariación $\rho_{\theta \psi}$ entre ambos parámetros. Bien, la covarianza entre ambos parámetros se calcula a partir de la fórmula: $COV(\theta, \psi) = \sigma^2_\theta \times \sigma^2_\psi \times \rho_{\theta \psi}$. Calculemos $COV$ y definamos nuestra matriz de varianza-covarianza:
+
+```{r}
+sigma_theta <- 1.2
+sigma_psi <- 0.8
+r <- 0.7
+cov_theta_psi <- sigma_theta * sigma_psi * r
+
+cov_m <- matrix(c(sigma_theta^2, cov_theta_psi, cov_theta_psi, sigma_psi^2), 
+                ncol = 2) # tantas columnas como parámetros
+cov_m
+```
+
+Tenemos los elementos necesarios para parametrizar la distribución normal multivariada que describe $\theta$ y $\psi$. Usaremos $MASS::mvrnorm()$ para generar valores aleatorios de la distribución:
+
+```{r}
+
+multi_norm <- mvrnorm(1e3, mu = mu, Sigma = cov_m)
+
+par(mfrow = c(1, 2), mar = c(4, 4, 2, 1))
+plot(density(multi_norm[, 1]), main = '', xlab = expression(theta),
+     lwd = 2, col = 2)
+lines(density(rnorm(1e3, theta, sigma_theta)),  
+     lwd = 2, col = 3)
+plot(density(multi_norm[, 2]), main = '', xlab = expression(psi), 
+     lwd = 3, col = 2)
+lines(density(rnorm(1e3, psi, sigma_psi)),  
+     lwd = 3, col = 3)
+
+par(mfrow = c(1, 1))
+
+```
+$MASS::mvrnorm()$ genera una distribución con dos normal con dos dimensiones, una por parámetro (Figura anterior). Grafiquemos la distribución multivariada:
+
+```{r}
+plot(multi_norm[, 1], multi_norm[, 2], main = '', 
+     ylab = expression(theta), xlab = expression(psi))
+for (i in seq(0.1, 0.9, by = 0.2)) {
+  lines(ellipse(cov_m, centre = mu, level = i), col = 4, lwd = 1.5)
+}
+```
+
+Será justamente este tipo de distribución normal multivariada el que usaremos como distribución previa en nuestros modelos. Ajustarlos requerirá algunas consideraciones adicionales respecto a la parametrización y reparametrización de las distribuciones previas, operaciones con matrices y algunos elementos nuevos de programación en `Stan`. 
+
+veamos un ejemplo:
+
+
+# Ejemplo: datos sintéticos de depredación de huevos
+Para contextualizar el ajuste de est tipo de modelos generemos un conjuntos de datos sintéticos sobre depredación de nidadas de el ave `X`. Supongamos que una investigadora y su equipo monitorearon 1000 nidadas con `N` huevos cada 1; los huevos estuvieron distribuidos en 20 parches de bosque y bajo dos condiciones de estrato vegetal, arbusto y arbóreo. Generemos los datos:
+
+```{r}
+
+```
+
+
 
 ```{r eval=FALSE}
 data(bangladesh)
@@ -240,6 +310,3 @@ mod_diagnostics(m2, out_m2)
 
 
 ```
-
-
-

@@ -1,5 +1,7 @@
 paquetes <- c("rethinking", "tidyverse", "magrittr", 'patchwork', 'rstan',
-              'cmdstanr', 'loo', 'MASS', 'ellipse', 'palmerpenguins', 'lterdatasampler')
+              'cmdstanr', 'loo', 'MASS', 'ellipse', 'palmerpenguins', 
+              'lterdatasampler')
+
 sapply(paquetes, library, character.only = T)
 
 options(mc.cores = parallel::detectCores())
@@ -36,7 +38,7 @@ plot(nidos[, 1], nidos[, 2], xlab = expression(alpha),
      ylab = expression(beta))
 for (i in seq(0.1, 0.9, by = 0.1)) {
   l <- ellipse(mat_VC_alpha, centre = mu1, level = i)
-  lines(l[, 1], l[, 2], col = 'cyan4')
+  lines(l[, 1], l[, 2], col = 'tomato', lwd = 2)
 }
 
 set.seed(123)
@@ -45,7 +47,7 @@ plot(parche[, 1], parche[, 2], xlab = expression(tau),
      ylab = expression(beta))
 for (i in seq(0.1, 0.9, by = 0.1)) {
   l <- ellipse(mat_VC_tau, centre = mu2, level = i)
-  lines(l[, 1], l[, 2], col = 'cyan4')
+  lines(l[, 1], l[, 2], col = 'tomato', lwd = 2)
 }
 par(mfrow = c(1, 1))
 
@@ -80,6 +82,116 @@ dat <-
     parche = parches
   )
 
+cat(file = 'multilevel_mods_II/eg_cov_0.stan', 
+    '
+    data{
+      int N;
+      int N_parche;
+      int N_bosque;
+      int N_nidos;
+      array[N] int nido;
+      array[N] int nidada;
+      array[N] int bosque;
+      array[N] int huevos;
+      array[N] int parche;
+    }
+    
+    parameters {
+      vector[N_nidos] z_alpha;
+      real mu_alpha;
+      real<lower = 0> sigma_alpha;
+      vector[N_parche] z_tau;
+      real mu_tau;
+      real<lower = 0> sigma_tau;
+      vector[N_parche] z_beta;
+      real mu_beta;
+      real<lower = 0> sigma_beta;
+    }
+    
+    transformed parameters {
+      vector[N_nidos] alpha;
+      vector[N_parche] tau;
+      vector[N_parche] beta;
+      alpha = mu_alpha + z_alpha*sigma_alpha;
+      tau = mu_tau + z_tau*sigma_tau;
+      beta = mu_beta + z_beta*sigma_beta;
+    }
+    
+    model{
+      vector[N] p;
+      z_alpha ~ normal(0, 1);
+      mu_alpha ~ normal(0, 1);
+      sigma_alpha ~ exponential(1);
+      z_tau ~ normal(0, 1);
+      mu_tau ~ normal(5, 2);
+      sigma_tau ~ exponential(1);
+      z_beta ~ normal(0, 1);
+      mu_beta ~ normal(0, 1);
+      sigma_beta ~ exponential(1);
+    
+      for (i in 1:N) {
+        p[i] = alpha[nido[i]] + tau[parche[i]] + beta[parche[i]] * bosque[i];
+        p[i] = inv_logit(p[i]);
+      }
+    
+      huevos ~ binomial(nidada, p);
+    }
+    
+    generated quantities{
+      vector[N] log_lik;
+      vector[N] p;
+      array[N] int ppcheck;
+    
+      for (i in 1:N) {
+        p[i] = alpha[nido[i]] + tau[parche[i]] + beta[parche[i]] * bosque[i];
+        p[i] = inv_logit(p[i]);
+      }
+    
+      for (i in 1:N) log_lik[i] = binomial_lpmf(huevos[i] | nidada[i], p[i]);
+    
+      ppcheck = binomial_rng(nidada, p);
+    }
+    ')
+
+file <- paste(getwd(), '/multilevel_mods_II/eg_cov_0.stan', sep = '')
+fit_m_noCOR <- cmdstan_model(file, compile = T)
+
+m_noCORR <- 
+  fit_m_noCOR$sample(
+    data = dat,
+    iter_sampling = 4e3, 
+    iter_warmup = 500,
+    chains = 3,
+    parallel_chains = 3, 
+    thin = 3,
+    refresh = 500
+  )
+
+out_noCOR <- m_noCORR$summary()
+
+mod_diagnostics(m_noCORR, out_noCOR)
+
+ppcheck <- as.matrix(m_noCORR$draws(variables = 'ppcheck', format = 'df'))
+
+plot(density(ppcheck[1, ]), main = '', lwd = 0.1, ylim = c(0, 0.14))
+for (i in 1:500) lines(density(ppcheck[i, ]), lwd = 0.1)
+lines(density(dat$huevos), col = 'red', lwd = 2)
+
+post <- m_noCORR$draws(variable = c('alpha', 'tau', 'beta'), format = 'df')
+post_noCOR <- 
+  list(
+    alpha = post[, grep('alpha', colnames(post))],
+    tau = post[, grep('tau', colnames(post))],
+    beta = post[, grep('beta', colnames(post))]
+  )
+
+
+par(mar = c(4, 4, 1, 1))
+plot(apply(post_noCOR$tau, 2, mean), 
+     apply(post_noCOR$beta, 2, mean), 
+     main = '')
+
+# ========
 cat(file = 'multilevel_mods_II/eg_cov_par1.stan', 
     '
     data{
@@ -304,18 +416,12 @@ rho_parche <- m2$draws(variables = c('rho_parche'),
 sigma_parche <- m2$draws(variables = 'sigma_tau', format = 'df')
 
 sigmas_parche <- 
-  matrix(c(mean(sigma_tau$`sigma_tau[1]`)^2,
-             mean(rho$`rho_parche[2,1]`),
-             mean(rho$`rho_parche[2,1]`),
-             mean(sigma_tau$`sigma_tau[2]`)^2), ncol = 2)
+  matrix(c(mean(sigma_parche$`sigma_tau[1]`)^2,
+             mean(rho_parche$`rho_parche[2,1]`),
+             mean(rho_parche$`rho_parche[2,1]`),
+             mean(sigma_parche$`sigma_tau[2]`)^2), ncol = 2)
 
 mu_parche <- c(mean(post$tau), mean(post$beta))
-
-par(mfrow = c(1, 2))
-post %$% plot(tau, beta, xlab = expression(tau), 
-              ylab = expression(beta))
-for (i in seq(0.1, 0.9, by = 0.2))
-  lines(ellipse(sigmas_parche, centre = mu_parche, level = i), lwd = 0.5)
 
 mu_nido <- c(mean(post$alpha), mean(post$beta2))
 
@@ -332,14 +438,24 @@ sigmas_nido <-
       sigmas_nido[2]^2), ncol = 2
   )
 
-post %$% plot(alpha, beta2, xlim = c(-2.5, 2.5), ylim = c(-2.5, 2.5))
+
+par(mfrow = c(1, 2))
+post %$% plot(tau, beta, xlab = expression(tau), 
+              ylab = expression(beta))
+for (i in seq(0.1, 0.9, by = 0.2))
+  lines(ellipse(sigmas_parche, centre = mu_parche, level = i), lwd = 0.5)
+
+post %$% plot(alpha, beta2, xlim = c(-2.5, 2.5), ylim = c(-2.5, 2.5), 
+              xlab = expression(tau), 
+              ylab = expression(beta))
 for (i in seq(0.1, 0.9, by = 0.2)) lines(ellipse(sigmas_nido, 
                                                  centre = mu_nido, 
                                                  level = i))
+par(mfrow = c(1, 1))
 
-plot(density(rho$parche$`rho_parche[2,1]`), col =4, lwd = 3, 
+plot(density(rho_parche$`rho_parche[2,1]`), col =4, lwd = 3, 
      xlim = c(-1, 1))
-lines(density(rho$nido$`rho_nido[2,1]`), col =2, lwd = 3)
+lines(density(rho_nido$`rho_nido[2,1]`), col =2, lwd = 3)
 
 
 

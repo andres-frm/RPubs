@@ -167,6 +167,10 @@ m_noCORR <-
     refresh = 500
   )
 
+m_noCORR$save_object('multilevel_mods_II/eg_cov_0.rds')
+
+m_noCORR <- readRDS('multilevel_mods_II/eg_cov_0.rds')
+
 out_noCOR <- m_noCORR$summary()
 
 mod_diagnostics(m_noCORR, out_noCOR)
@@ -280,9 +284,15 @@ m <-
     seed = 123
   )
 
+m$save_object(paste(getwd(), '/multilevel_mods_II/eg_cov_par1.rds', sep = ''))
+
+m <- readRDS('multilevel_mods_II/eg_cov_par1.rds')
+
 m_out <- m$summary()
 
-m_out[m_out$rhat > 1.01, ] |> print(n = 555)
+par(mfrow = c(3, 3), mar = c(4, 4, 1, 1))
+for (i in 1:9) trace_plot(m, m_out[m_out$rhat >1.01,][-c(1:5), ]$variable[i+2], 3)
+par(mforw = c(1, 1))
 
 mod_diagnostics(m, m_out)
 
@@ -353,7 +363,7 @@ cat(file = 'multilevel_mods_II/eg_cov_par2.stan',
         p2[i] = inv_logit(p2[i]);
       }
       
-      huevos ~ binomial(nidada, p);
+      huevos ~ binomial(nidada, p2);
     
     }
     
@@ -391,6 +401,8 @@ m2 <-
     refresh = 200, 
     seed = 123
   )
+
+m2$save_object('multilevel_mods_II/eg_cov_par2.rds')
 
 m2_out <- m2$summary()
 
@@ -439,15 +451,19 @@ sigmas_nido <-
   )
 
 
+tau_noCORR <- apply(post_noCOR$tau, 2, mean)
+beta_noCORR <- apply(post_noCOR$beta, 2, mean)
+obs_tau_beta <- parche[1:20, ]
+
 par(mfrow = c(1, 2))
 post %$% plot(tau, beta, xlab = expression(tau), 
               ylab = expression(beta))
 for (i in seq(0.1, 0.9, by = 0.2))
   lines(ellipse(sigmas_parche, centre = mu_parche, level = i), lwd = 0.5)
 
-post %$% plot(alpha, beta2, xlim = c(-2.5, 2.5), ylim = c(-2.5, 2.5), 
-              xlab = expression(tau), 
-              ylab = expression(beta))
+post %$% plot(tau, beta, xlab = expression(tau), 
+              ylab = expression(beta), col = 'red')
+ points()
 for (i in seq(0.1, 0.9, by = 0.2)) lines(ellipse(sigmas_nido, 
                                                  centre = mu_nido, 
                                                  level = i))
@@ -465,7 +481,20 @@ plot(density(apply(post$alpha, 2, mean)))
 colnames(post)
 
 
-
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
 
 a <- 3.5 # average morning wait time 
 b <- (-1) # average difference afternoon wait time

@@ -38,11 +38,11 @@ source('functions_mod_diagnostics.R')
 
 ```
 
-En el [capítulo anterior](https://rpubs.com/andresfeli/multilevel_I) expuse cómo los modelos jerárquicos usan la información disponible en cada agrupamiento (*cluster*) de datos para generar estimaciones más precisas de los parámetros (*partial pooling*). Presenté las ventajas de esta aproximación, y su utilidad cuando trabajamos con observaciones desbalanceadas entre grupos. usar esta aproximación suponía considerar distribuciones de probabilidad de la población de parámetros (*previa adaptativa*), hiper previas (*distribuciones previas de las previas*) y la reparametrización de los modelos para para mejorar la eficiencia computacional y la convergencia de las cadenas. Bien, en esta sección aumentaremos el nivel de abstracción. Emplearemos *partial pooling* para cruzar la información ya no solo entre *clusters*, sino también entre parámetros. Este método aprovecha la covariación entre parámetros para extraer una mayor cantidad de información de los datos, y es la base para extender los modelos jerárquicos a áreas más especializadas (e.g. modelos filogenéticos, modelos espacio-estado, análisis de redes).
+En el [capítulo anterior](https://rpubs.com/andresfeli/multilevel_I) expuse cómo los modelos jerárquicos usan la información disponible en cada agrupamiento (*cluster*) de datos para generar estimaciones más precisas de los parámetros (*partial pooling*). Presenté las ventajas de esta aproximación, y su utilidad cuando trabajamos con observaciones desbalanceadas entre grupos. Usar esta aproximación suponía considerar distribuciones de probabilidad de la población de parámetros (*previa adaptativa*), hiper previas (*distribuciones previas de las previas*) y la reparametrización de los modelos para mejorar la eficiencia computacional y la convergencia de las cadenas. Bien, en esta sección aumentaremos el nivel de abstracción. Emplearemos *partial pooling* para cruzar la información ya no solo entre *clusters*, sino también entre *parámetros.* Este método aprovecha la covariación entre parámetros para extraer una mayor cantidad de información de los datos, y es la base para extender los modelos jerárquicos a áreas más especializadas (e.g. modelos filogenéticos, modelos espacio-estado, análisis de redes).
 
 ::: {.border}
 
-El material de esta sección es avanzado, requiere la revisión del [capítulo anterior](https://rpubs.com/andresfeli/multilevel_I), algunas nociones adicionales de [programación en `Stan`]() y mucha paciencia. Si usted es una persona con capacidades intelectuales convencionales, igual que yo, el entendimiento y la intuición para ajustar este tipo de modelos solo ocurrirá con la repetición y práctica.
+*El material de esta sección es avanzado, requiere la revisión del [capítulo anterior](https://rpubs.com/andresfeli/multilevel_I), algunas nociones adicionales de [programación en `Stan`]() y __mucha paciencia__. Si usted es una persona con capacidades intelectuales convencionales, igual que yo, el entendimiento y la intuición para ajustar este tipo de modelos solo ocurrirá con la repetición y práctica.*
 
 :::
 
@@ -51,7 +51,7 @@ El material de esta sección es avanzado, requiere la revisión del [capítulo a
 
 Acabo de mencionar que este tipo de modelos aprovecha la covariación entre parámetros para intercambiar información y producir mejores estimaciones. En este caso, el modelo emplea un *vector de promedios* para cada parámetros --cada promedio es en realidad una distribución de probabilidad-- y una *matriz de varianza-covarianza* para parametrizar una *distribución normal multivariada* que asocia los parámetros y realizar su estimación. Veamos en qué consiste:
 
-Supongamos los parametros $\theta \sim normal(\mu=2, \sigma = 1.2)$ y $\psi \sim normal(\mu = 1.1, \sigma=0.8)$, cuyo coeficiente de correlación $r = 0.7$. Para generar la distribución normal multivariada que relaciona ambos parámetros requerimos:
+Supongamos los parámetros $\theta \sim normal(\mu=2, \sigma = 1.2)$ y $\psi \sim normal(\mu = 1.1, \sigma=0.8)$, cuyo coeficiente de correlación $r = 0.7$. Para generar la distribución normal multivariada que relaciona ambos parámetros requerimos:
 
 i. Vector de promedios $\mu = [\mu_\theta, \mu_\psi]$:
 ```{r}
@@ -60,7 +60,7 @@ psi <- 1.1
 mu <- c(theta, psi)
 ```
 
-ii. Matriz de varianza-covarianza. Esta, es una matriz cuadrada cuya diagonal corresponde a varianza de los parámetros y mientras (i.e. $\sigma^2_\theta$, $\sigma^2_\psi$) los demás elementos de la matriz corresponden a la covariación $\rho_{\theta \psi}$ entre ambos parámetros. Bien, la covarianza entre ambos parámetros se calcula a partir de la fórmula: $COV(\theta, \psi) = \sigma^2_\theta \times \sigma^2_\psi \times \rho_{\theta \psi}$. Calculemos $COV$ y definamos nuestra matriz de varianza-covarianza:
+ii. Matriz de varianza-covarianza. Esta es una matriz cuadrada cuya diagonal corresponde a la varianza de los parámetros (i.e. $\sigma^2_\theta$, $\sigma^2_\psi$), mientras que los demás elementos de la matriz corresponden a la covariación $\rho_{\theta \psi}$ entre ambos parámetros. Dicha covarianza se calcula a partir de la fórmula: $COV(\theta, \psi) = \sigma^2_\theta \times \sigma^2_\psi \times \rho_{\theta \psi}$. Calculemos $COV$ y definamos nuestra matriz de varianza-covarianza:
 
 ```{r}
 sigma_theta <- 1.2
@@ -92,7 +92,7 @@ lines(density(rnorm(1e3, psi, sigma_psi)),
 par(mfrow = c(1, 1))
 
 ```
-$MASS::mvrnorm()$ genera una distribución con dos normal con dos dimensiones, una por parámetro (Figura anterior). Grafiquemos la distribución multivariada:
+$MASS::mvrnorm()$ genera, en este caso, una distribución normal con dos dimensiones, una por parámetro (Figura anterior). Grafiquemos la distribución multivariada:
 
 ```{r}
 plot(multi_norm[, 1], multi_norm[, 2], main = '', 
@@ -102,13 +102,13 @@ for (i in seq(0.1, 0.9, by = 0.2)) {
 }
 ```
 
-Será justamente este tipo de distribución normal multivariada el que usaremos como distribución previa en nuestros modelos. Ajustarlos requerirá algunas consideraciones adicionales respecto a la parametrización y reparametrización de las distribuciones previas, nuevas distribuciones de probabilidad, operaciones con matrices y algunos elementos nuevos de programación en `Stan`. 
+Será justamente este tipo de distribución normal multivariada la que usaremos como distribución previa en nuestros modelos. Ajustarlos requerirá algunas consideraciones adicionales respecto a la parametrización y reparametrización de las distribuciones previas, nuevas distribuciones de probabilidad, operaciones con matrices y algunos elementos nuevos de programación en `Stan`. 
 
 veamos un ejemplo:
 
 
 # Ejemplo: datos sintéticos de depredación de huevos
-Para contextualizar el ajuste de este tipo de modelos generemos un conjuntos de datos sintéticos sobre depredación de nidadas de el ave `X`. Supongamos que una investigadora y su equipo monitorearon 1000 nidadas con `N` huevos cada una; los huevos estuvieron distribuidos en 20 parches de bosque y bajo dos condiciones de estrato vegetal, arbusto y arbóreo. El objetivo es calcular la probabilidad de que los huevos sean depredados en cada condición y, por lo tanto, se debe "controlar" la variación asociada a los nidos y los parches --por "*controlar*" me refiero a incluir dichas variables en el modelo para estimar parámetros para cada nido y parche. Además, lo que la investigadora descubrirá una vez ajuste los modelos, es que generaremos los datos de manera que los parches y la condición de estrato vegetal covaríen.  
+Para contextualizar el ajuste de este tipo de modelos generemos un conjunto de datos sintéticos sobre depredación de nidadas de el ave `X`. Supongamos que una investigadora y su equipo monitorearon 1000 nidadas con `N` huevos cada una; los huevos estuvieron distribuidos en 20 parches de bosque y bajo dos condiciones de estrato vegetal, arbustivo y arbóreo. El objetivo es calcular la probabilidad de que los huevos sean depredados en cada condición y, por lo tanto, se debe "controlar" la variación asociada a los nidos y los parches --por "*controlar*" me refiero a incluir dichas variables en el modelo para estimar parámetros para cada nido y parche. Además, lo que la investigadora descubrirá solo una vez ajuste los modelos, es que generaremos los datos de manera que los parches y la condición de estrato vegetal covaríen.  
 
 Primero, siguiendo el procedimiento descrito arriba, generemos la estructura de covariación entre parches ($\tau$) y estrato ($\beta$). 
 
@@ -339,9 +339,10 @@ mod_diagnostics(m_noCORR, out_noCOR)
 
 ```
 
-Tenemos de Pareto k mayores a 0.7, lo que puede sugerir que el modelo es demasiado optimísta en término de la estimación de los parámetros. Por lo demás, todos los parámetros tienen un *ess* por encima de 1000 y *Rhat* por debajo de 1.01. Ya volveremos a esto cuando ajustemos los modelos incluyendo la estructura de covariación entre los parámetros. 
+Tenemos de Pareto k mayores a 0.7, lo que puede sugerir que el modelo es demasiado optimista en término de la estimación de los parámetros. Por lo demás, todos los parámetros tienen un *ess* por encima de 1000 y *Rhat* por debajo de 1.01. Ya volveremos a esto cuando ajustemos los modelos incluyendo la estructura de covariación entre los parámetros. 
 
 Ahora veamos las distribuciones predictivas posteriores:
+
 ```{r}
 ppcheck <- as.matrix(m_noCORR$draws(variables = 'ppcheck', format = 'df'))
 
@@ -370,7 +371,7 @@ plot(apply(post_noCOR$tau, 2, mean),
 
 ```
 
-Claramente existe una asociación entre los parámetros, pero el algoritmo no puede detectarla porque no la incluimos en la estructura del modelo. Ahora que la investigadora la conoce, reformulemos el modelo:
+Claramente existe una asociación entre los parámetros, pero el algoritmo no puede detectarla porque no la incluimos en la estructura del modelo. Reformulemos el modelo:
 
 La función de likelihood y la función lineal son los mismos:
 
@@ -399,7 +400,7 @@ $$
 
 \end{align}
 $$
-$MVNormal([\overline{\tau}, ~ \overline{\beta}],~R, [\overline{\sigma_{\tau}}, \overline{\sigma_{\beta}}])$ corresponde la previa adaptativa de la poblacion de los parámetros cuya correlación nos interesa incorporar (i.e. $[\alpha_{nido_i}, ~ \beta_{nido_i}]$); $R$ corresponde a la matriz de correlación de los parámetros, cuya previa proviene de una distribución de probabilidad de matrices de correlación $LKJCorr()$ (ver abajo las de reducir o aumentar los valores para parametrizar esta distribución); $[\overline{\sigma_{\tau}}, \overline{\sigma_{\beta}}]$ corresponde a un vector de párametros de dispersión para $\tau_{parche}$ y $\beta_{parche}$. La misma estructura de previas se repite para $[\alpha_{parche_i}, ~ \beta_{parche_i}]$. 
+$MVNormal([\overline{\tau}, ~ \overline{\beta}],~R, [\overline{\sigma_{\tau}}, \overline{\sigma_{\beta}}])$ corresponde la previa adaptativa de la poblacion de los parámetros cuya correlación nos interesa incorporar (i.e. $[\alpha_{nido_i}, ~ \beta_{nido_i}]$); $R$ corresponde a la matriz de correlación de los parámetros, cuya previa proviene de una distribución de probabilidad de matrices de correlación $LKJCorr()$ (ver abajo las consecuencias de reducir o aumentar el valor de su parámetro); $[\overline{\sigma_{\tau}}, \overline{\sigma_{\beta}}]$ corresponde a un vector de párametros de dispersión para $\tau_{parche}$ y $\beta_{parche}$. La misma estructura de previas se repite para $[\alpha_{parche_i}, ~ \beta_{parche_i}]$. 
 
 
 ```{r}
@@ -522,7 +523,7 @@ m$save_object(paste(getwd(), '/multilevel_mods_II/eg_cov_par1.rds', sep = ''))
 
 ```
 
-Y verifiquemos el ajuste del modelo
+Verifiquemos la calidad de su ajuste
 
 ```{r}
 m <- readRDS('eg_cov_par1.rds')
@@ -538,10 +539,10 @@ mod_diagnostics(m, m_out)
 m$diagnostic_summary()
 ```
 
-Claramente las cadenas de muchos parámetros exploraron distintas regiones del espacio (del parámetro :) ), tenemos valores de `Rhat` > 1.01 y un `ess` < 1000 para muchos parámetros. 
+Claramente las cadenas de varios parámetros exploraron distintas regiones del espacio (del parámetro :) ), tenemos valores de `Rhat` > 1.01 y un `ess` < 1000 para muchos parámetros. 
 
-:::{}
-Para recordar: Las *transiciones divergente* son un lugar común en modelos jerárquicos dado que tenemos parámetros cuya distribución es función de otros parámetros. Esto resulta en ineficiencia del algoritmo para explorar el espacio del parámetros, tiempos de cómputo más prolongados y bajo número de estimados estadísticamente independientes para cada distribución posterior. En el mejor de los casos ajustar el modelo con mayor número de iteraciones puede resultar en la convergencia de las cadenas; en el peor, las cadenas simplemente no van a converger y la reparametrización es indispensable.
+:::{.border}
+*Para recordar: Las __transiciones divergentes__ son un lugar común en modelos jerárquicos dado que tenemos parámetros cuya distribución es función de otros parámetros. Esto resulta en ineficiencia del algoritmo para explorar el espacio del parámetro, tiempos de cómputo más prolongados y bajo número de estimados estadísticamente independientes para cada distribución posterior. En el mejor de los casos ajustar el modelo con mayor número de iteraciones puede resultar en la convergencia de las cadenas; en el peor, las cadenas simplemente no van a converger y la reparametrización es indispensable.*
 :::
 
 Cómo ya es rutina con los modelos jerárquicos debemos reparametrizar el modelo:
@@ -556,17 +557,22 @@ $$
 & \beta_{parche_i} = \overline{\beta} + \theta[, 2] \\
 & \omega = (diag(\sigma_\alpha), R1_{cholesky}Z_\alpha)^T \\
 & \theta = (diag(\sigma_\tau), R2_{cholesky}Z_\tau)^T \\
-& \overline{\alpha}, \overline{\tau} \sim Normal(0, 1) \\
-& \sigma_\alpha, \sigma_\tau \sim exponential(1) \\
-& Z_{\alpha,\beta}, ~Z_{\tau,\beta} \sim Normal(0, 1) \\
-& R1_{cholesky}, ~R2_{cholesky} \sim LKJCorr(2) \\
+& \overline{\alpha} \sim Normal(0, 1) \\
+& \overline{\tau} \sim Normal(0, 1) \\
+& \sigma_\alpha \sim exponential(1) \\
+& \sigma_\tau \sim exponential(1) \\
+& Z_{\alpha,\beta} \sim Normal(0, 1) \\
+& Z_{\tau,\beta} \sim Normal(0, 1) \\
+& R1_{cholesky} \sim LKJCorr(2) \\
+& R2_{cholesky} \sim LKJCorr(2) \\
 
 
 \end{align}
 $$
-Discutamos un poco el modelo reparametrizado. En este caso reemplazamos la distribucion normal multivariada por las matrices $Z_{\alpha,\beta}$ y $Z_{\tau,\beta}$ a cuyos elementos fue asignada una previa $Normal(0,~1)$. Luego tenemos que a las matrices de correlación, $R1_{cholesky}$ y $R2_{cholesky}$, son factorizadas a través de una *decomposición de Cholesky* (necesaria para que funcione la reparametrización). $(diag(\sigma_\alpha), R1_{cholesky}Z_\alpha)^T$ denota operaciones de álgebra lineal para factorizar las matrices de correlación, estandarizada ($Z$) y la diagonal de los parámetros de dispersión. Se usa la transpuesta ($^T$) de esta matriz para generar los parámetros de la función lineal. 
+Discutamos un poco el modelo reparametrizado. En este caso reemplazamos la distribución normal multivariada por las matrices $Z_{\alpha,\beta}$ y $Z_{\tau,\beta}$ a cuyos elementos fue asignada una previa $Normal(0,~1)$. Luego tenemos que las matrices de correlación, $R1_{cholesky}$ y $R2_{cholesky}$, son factorizadas a través de una *descomposición de Cholesky* (necesaria para que funcione la reparametrización). La expresión $(diag(\sigma_\alpha), R1_{cholesky}Z_\alpha)^T$ denota operaciones de álgebra lineal para factorizar las matrices de correlación, estandarizada ($Z$) y la diagonal de los parámetros de dispersión. Se usa la transpuesta ($^T$) de esta matriz para generar los parámetros de la función lineal. 
 
-¡Si! La reparametrización de estos modelos es ligeramente más compleja. Sin embargo, `Stan` se encarga del álgebra lineal y nosotros solo debemos prestar atención en la asignación de las dimensiones de las matrices. Veamos el modelo en `Stan`: 
+¡Si! La reparametrización de estos modelos es ligeramente más compleja. Sin embargo, convengamos que `Stan` se encarga del trabajo duro (i.e. operaciones de álgebra lineal), mientras que nosotros solo debemos prestar atención a la asignación de las dimensiones de las matrices y a la indexación. Veamos el modelo en `Stan`: 
+
 
 ```{r, eval = FALSE}
 cat(file = 'multilevel_mods_II/eg_cov_par2.stan', 
@@ -659,7 +665,7 @@ cat(file = 'multilevel_mods_II/eg_cov_par2.stan',
     ")
 ```
 
-Discutamos los elementos nuevos de la sintaxis: `cholesky_factor_corr` indica una matriz de correlación factorizada con una descomposición de Cholesky; `diag_pre_multiply` realiza la factorización de las matrices de Cholesky, estandarizada y diagonal de los parámetros de dispersión; `'` indica la transpuesta de la matriz; `lkj_corr_cholesky` es el equivalente de `lkj_corr()` para matrices de correlaciones factorizadas con descomposición de Cholesky; la función `multiply_lower_tri_self_transpose` convierte la matriz de Cholesky a una matriz de correlación que podemos interpretar en rangos entre -1 y 1.
+Elementos nuevos de la sintaxis: `cholesky_factor_corr` indica una matriz de correlación factorizada con una descomposición de Cholesky; `diag_pre_multiply` realiza la factorización de las matrices de Cholesky, estandarizada y diagonal de los parámetros de dispersión; `'` indica la transpuesta de la matriz; `lkj_corr_cholesky` es el equivalente de `lkj_corr()` para matrices de correlaciones factorizadas con descomposición de Cholesky; la función `multiply_lower_tri_self_transpose` convierte la matriz de Cholesky a una matriz de correlación que podemos interpretar en rangos entre -1 y 1.
 
 Ajustemos el modelo:
 
@@ -686,7 +692,7 @@ m2 <-
 Verifiquemos la "sanidad" del ajuste
 
 ```{r}
-m2$save_object('multilevel_mods_II/eg_cov_par2.rds')
+m2 <- readRDS('eg_cov_par2.rds')
 
 m2_out <- m2$summary()
 
@@ -706,7 +712,8 @@ lines(density(dat$huevos), col = 'red', lwd = 2)
 Todo En orden.
 
 
-Extraigamos muestras de las distribuciones posteriores de los parámetros y veamos como el modelo pudo estimar la correlación entre $\beta$ y $\tau$. 
+Extraigamos muestras de las distribuciones posteriores de los parámetros y comprobemos que el modelo pudo estimar la correlación entre $\beta$ y $\tau$. También, comparemos los parámetros generadores de los datos (i.e. los "reales"), los estimados por el *partial pooling* entre clusters, y el modelo con *partial pooling* entre clusters/parámetros.
+
 ```{r}
 post <- m2$draws(variables = c('alpha', 'tau', 'beta', 'beta2'), format = 'df')
 post <- 
@@ -744,28 +751,156 @@ sigmas_nido <-
   )
 
 
-par(mfrow = c(1, 2))
+tau_noCORR <- apply(post_noCOR$tau, 2, mean)
+beta_noCORR <- apply(post_noCOR$beta, 2, mean)
+obs_tau_beta <- parche[1:20, ]
+
+par(mfrow = c(1, 2), mar = c(4, 4, 2.5, 1))
 post %$% plot(tau, beta, xlab = expression(tau), 
-              ylab = expression(beta))
+              ylab = expression(beta), col = 2, 
+              xlim = c(-3, 3), ylim = c(-1, 4.5), 
+              main = 'Modelo\n par. pool. pars/clusters')
 for (i in seq(0.1, 0.9, by = 0.2))
   lines(ellipse(sigmas_parche, centre = mu_parche, level = i), lwd = 0.5)
 
-post %$% plot(alpha, beta2, xlim = c(-2.5, 2.5), ylim = c(-2.5, 2.5), 
-              xlab = expression(tau), 
-              ylab = expression(beta))
-for (i in seq(0.1, 0.9, by = 0.2)) lines(ellipse(sigmas_nido, 
-                                                 centre = mu_nido, 
-                                                 level = i))
+post %$% plot(tau, beta, xlab = expression(tau), 
+              ylab = expression(beta), col = 2, 
+              xlim = c(-3, 3), ylim = c(-1, 4.5), 
+              main = 'Pars. estimados y reales')
+points(tau_noCORR, beta_noCORR, col = 4)
+points(obs_tau_beta[, 1], obs_tau_beta[, 2], pch = 16)
 par(mfrow = c(1, 1))
 
 ```
 
+Los círculos rojos corresponden a los parámetros estimados con el modelo que incorpora la covarianza entre parámetros y las elipses denotan intervalos de credibilidad, desde 10 hasta 90%. En la derecha vemos los parámetros estimados de cada modelo (círculos azules = partial pooling entre clusters) y sus valores reales (puntos negros). A simple vista notamos que los puntos negros y los círculos rojos tienden a estar más solapados, lo que sugiere una mayor precisión del modelo que usa la información entre parámetros y clusters. Calculemos estos errores de estimación y realicemos algunos gráficos para enfatizar las ventajas de un modelo sobre otro.
+
+```{r}
+parametros <- 
+  tibble(beta_cor = post$beta, 
+       tau_cor = post$tau,
+       beta_noCORR = beta_noCORR, 
+       tau_noCORR = tau_noCORR, 
+       real_beta = obs_tau_beta[, 2], 
+       real_tau = obs_tau_beta[, 1]) 
+
+parametros <- 
+  parametros |> 
+  mutate(error_corr_beta = real_beta - beta_cor, 
+         error_corr_tau = real_tau - tau_cor, 
+         error_noCorr_beta = real_beta - beta_noCORR, 
+         error_noCorr_tau = real_tau - tau_noCORR, )
+
+par(mfrow = c(2, 2), mar = c(4, 4, 1.5, 1))
+parametros %$% 
+  plot(tau_noCORR, beta_noCORR, xlim = c(-1.5, 2.5), ylim = c(-1, 4), 
+       main = 'Error de estimación\n(par. pool. clusters)', 
+       xlab = expression(tau), ylab = expression(beta), col = 4)
+parametros %$%
+  points(real_tau, real_beta, pch = 16)
+parametros %$%
+  segments(x0 = tau_noCORR, x1 = real_tau, 
+           y0 = beta_noCORR, y1 = real_beta, lty = 3, lwd = 0.8)
+
+parametros %$% 
+  plot(tau_cor, beta_cor, xlim = c(-1.5, 1.8), ylim = c(-1, 4),
+       main = 'Error de estimación\n(par. pool. par/clusters)', 
+       col = 2, xlab = expression(tau), ylab = expression(beta))
+parametros %$%
+  points(real_tau, real_beta, pch = 16)
+parametros %$%
+  segments(x0 = tau_cor, x1 = real_tau, 
+           y0 = beta_cor, y1 = real_beta, lty = 3, lwd = 0.8)
+
+parametros %$% plot(density(error_corr_beta), col = 2, lwd = 3, 
+                    main = 'Error (observado - estimado)', 
+                    xlab = expression(beta))
+abline(v = median(parametros$error_corr_beta), lty = 3, col = 2, 
+       lwd = 3)
+parametros %$%
+  lines(density(error_noCorr_beta), col = 4, lwd = 3)
+abline(v = median(parametros$error_noCorr_beta), lty = 3, col = 4, 
+       lwd = 3)
+
+parametros %$% plot(density(error_corr_tau), col = 2, lwd = 3, 
+                    main = 'Error (observado - estimado)', 
+                    xlab = expression(tau), 
+                    xlim = c(-1.5, 0.45))
+abline(v = median(parametros$error_corr_tau), lty = 3, col = 2, 
+       lwd = 3)
+parametros %$%
+  lines(density(error_noCorr_tau), col = 4, lwd = 3)
+abline(v = median(parametros$error_noCorr_tau), lty = 3, col = 4, 
+       lwd = 3)
+par(mfrow = c(1, 1))
+```
+
+El color azul corresponde al modelo con partial pooling entre clusters, el rojo al modelo con partial polling entre parámetros/clusters. Ahora es claro que que ambos modelos estiman de manera similar $\beta$ --aunque sólo estamos comparando promedios sin la dispersión de las distribuciones posteriores, $\tau$ es otra historia. *El modelo que usa la covariación entre parámetros estima $\tau$ de manera bastante precisa, mientras que el modelo que solo emplea partial pooling entre clusters subestima el valor real de los $\tau_i$ en casi una unidad*. En efecto, incluir la estructura de covarianza de los parámetros en el modelo resulta en una mayor capacidad predictiva del modelo (*out of sample prediction*); comprobémoslo usando *leave-one-out cross-validation*:
+
+```{r}
+
+loo_compare(m_noCORR$loo(), m2$loo())
+
+```
+El 2do modelo es el mejor ranqueado.
+
+Finalmente, grafiquemos la distribución posterior de la correlación entre $\tau$ y $\beta$:
+
+```{r}
+
+plot(density(rho_parche$`rho_parche[2,1]`), col =4, lwd = 3, 
+     main = expression(rho[beta~tau]), xlab = expression(italic('r')))
+abline(v = median(rho_parche$`rho_parche[2,1]`), lty = 3, col = 4, 
+       lwd = 3)
+abline(v = rho_tau_beta, lty = 3, col = 1, 
+       lwd = 3)
+
+```
+
+El valor real de la correlación $\rho_{\beta - \tau}$ se encuentra contenido en la distribución posterior de nuestro parámetro, **WELL DONE!**.
 
 
+# Ejemplo 2: pingüinos y rasgos funcionales
+
+Usaremos los datos [`palmerpenguins`](https://allisonhorst.github.io/palmerpenguins/) para analizar la relación del tamaño del ala/aleta con el tamaño corporal del pingüino. Los datos son interesantes porque nos permitirán extender el ejemplo anterior ya que involucran variables continuas y están estratificados en cuatro niveles anidados: especie (niveles = 3), sexo (niveles = 2), isla (niveles = 3) y año (niveles = 2). La idea es modelar esta relación considerando la potencial covariación entre los efectos de grupo (i.e. año e isla) y efectos poblacionales (i.e. especies y sexo). Además, permitiremos que el algoritmo explore valores estratificados por especie/sexo. 
+
+Carguemos los datos y preparémoslos en el formato que requerimos:
+
+```{r}
+d <- na.omit(penguins)
+
+d <- d |> dplyr::select(species, year, island, sex, flipper_length_mm, body_mass_g)
+
+d$year <- as.factor(d$year)
+
+d$species_sex <- as.factor(paste(d$species, d$sex, sep = '_'))
+
+dat <- lapply(d, function(x) if(!is.double(x)) as.integer(x) else(x))
+
+dat$N <- length(dat$species)
+dat$N_spp <- max(dat$species)
+dat$N_sex <- 2
+dat$N_island <- max(dat$island)
+dat$N_year <- max(dat$year)
+dat$N_spp_sex <- max(dat$species_sex)
+
+```
+
+Definamos el modelo en notación matemática y luego en lenguaje `Stan`. 
+
+$$
+\begin{align}
+
+& largo~aleta~(mm)_{i} \sim Normal(\mu_i, ~ \sigma_i) \\
+& \mu_i = 
+
+\end{align}
+$$
 
 
+```{r, eval=FALSE}
 
-
+```
 
 
 

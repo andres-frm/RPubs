@@ -404,6 +404,8 @@ m2 <-
 
 m2$save_object('multilevel_mods_II/eg_cov_par2.rds')
 
+m2 <- readRDS('multilevel_mods_II/eg_cov_par2.rds')
+
 m2_out <- m2$summary()
 
 mod_diagnostics(m2, m2_out)
@@ -455,23 +457,88 @@ tau_noCORR <- apply(post_noCOR$tau, 2, mean)
 beta_noCORR <- apply(post_noCOR$beta, 2, mean)
 obs_tau_beta <- parche[1:20, ]
 
-par(mfrow = c(1, 2))
+par(mfrow = c(1, 2), mar = c(4, 4, 2.5, 1))
 post %$% plot(tau, beta, xlab = expression(tau), 
-              ylab = expression(beta))
+              ylab = expression(beta), col = 2, 
+              xlim = c(-3, 3), ylim = c(-1, 4.5), 
+              main = 'Modelo\n par. pool. pars/clusters')
 for (i in seq(0.1, 0.9, by = 0.2))
   lines(ellipse(sigmas_parche, centre = mu_parche, level = i), lwd = 0.5)
 
 post %$% plot(tau, beta, xlab = expression(tau), 
-              ylab = expression(beta), col = 'red')
- points()
-for (i in seq(0.1, 0.9, by = 0.2)) lines(ellipse(sigmas_nido, 
-                                                 centre = mu_nido, 
-                                                 level = i))
+              ylab = expression(beta), col = 2, 
+              xlim = c(-3, 3), ylim = c(-1, 4.5), 
+              main = 'Pars. estimados y reales')
+points(tau_noCORR, beta_noCORR, col = 4)
+points(obs_tau_beta[, 1], obs_tau_beta[, 2], pch = 16)
+par(mfrow = c(1, 1))
+
+parametros <- 
+  tibble(beta_cor = post$beta, 
+       tau_cor = post$tau,
+       beta_noCORR = beta_noCORR, 
+       tau_noCORR = tau_noCORR, 
+       real_beta = obs_tau_beta[, 2], 
+       real_tau = obs_tau_beta[, 1]) 
+
+parametros <- 
+  parametros |> 
+  mutate(error_corr_beta = real_beta - beta_cor, 
+         error_corr_tau = real_tau - tau_cor, 
+         error_noCorr_beta = real_beta - beta_noCORR, 
+         error_noCorr_tau = real_tau - tau_noCORR, )
+
+par(mfrow = c(2, 2))
+parametros %$% 
+  plot(tau_noCORR, beta_noCORR, xlim = c(-1.5, 2.5), ylim = c(-1, 4), 
+       main = 'Error de estimación\n(par. pool. clusters)', 
+       xlab = expression(tau), ylab = expression(beta), col = 4)
+parametros %$%
+  points(real_tau, real_beta, pch = 16)
+parametros %$%
+  segments(x0 = tau_noCORR, x1 = real_tau, 
+           y0 = beta_noCORR, y1 = real_beta, lty = 3, lwd = 0.8)
+
+parametros %$% 
+  plot(tau_cor, beta_cor, xlim = c(-1.5, 1.8), ylim = c(-1, 4),
+       main = 'Error de estimación\n(par. pool. par/clusters)', 
+       col = 2, xlab = expression(tau), ylab = expression(beta))
+parametros %$%
+  points(real_tau, real_beta, pch = 16)
+parametros %$%
+  segments(x0 = tau_cor, x1 = real_tau, 
+           y0 = beta_cor, y1 = real_beta, lty = 3, lwd = 0.8)
+
+parametros %$% plot(density(error_corr_beta), col = 2, lwd = 3, 
+                    main = 'Error (observado - estimado)', 
+                    xlab = expression(beta))
+abline(v = median(parametros$error_corr_beta), lty = 3, col = 2, 
+       lwd = 3)
+parametros %$%
+  lines(density(error_noCorr_beta), col = 4, lwd = 3)
+abline(v = median(parametros$error_noCorr_beta), lty = 3, col = 4, 
+       lwd = 3)
+
+parametros %$% plot(density(error_corr_tau), col = 2, lwd = 3, 
+                    main = 'Error (observado - estimado)', 
+                    xlab = expression(tau), 
+                    xlim = c(-1.5, 0.45))
+abline(v = median(parametros$error_corr_tau), lty = 3, col = 2, 
+       lwd = 3)
+parametros %$%
+  lines(density(error_noCorr_tau), col = 4, lwd = 3)
+abline(v = median(parametros$error_noCorr_tau), lty = 3, col = 4, 
+       lwd = 3)
 par(mfrow = c(1, 1))
 
 plot(density(rho_parche$`rho_parche[2,1]`), col =4, lwd = 3, 
-     xlim = c(-1, 1))
-lines(density(rho_nido$`rho_nido[2,1]`), col =2, lwd = 3)
+     main = expression(rho[beta~tau]), xlab = expression(italic('r')))
+abline(v = median(rho_parche$`rho_parche[2,1]`), lty = 3, col = 4, 
+       lwd = 3)
+abline(v = rho_tau_beta, lty = 3, col = 1, 
+       lwd = 3)
+
+
 
 
 
@@ -1122,7 +1189,7 @@ dim(prior_corr)
 
 plot(density(prior_corr[, 2, 1]))
 
-cat(file = 'penguins_par_pool.stan', 
+cat(file = 'multilevel_mods_II/penguins_par_pool.stan', 
     "
     data{
       int N;
@@ -1201,7 +1268,7 @@ cat(file = 'penguins_par_pool.stan',
       ppcheck = normal_rng(mu_, sigma);
     }")
 
-file <- paste(getwd(), '/penguins_par_pool.stan', sep = '')
+file <- paste(getwd(), 'multilevel_mods_II/penguins_par_pool.stan', sep = '')
 
 fit_m1 <- cmdstan_model(file, compile = T)
 
@@ -1243,7 +1310,7 @@ x_seq <- seq(min(dat$body_mass_g), max(dat$body_mass_g), length.out = 100)
 
 sex <- c('H', 'M')
 
-post_m1$sigma$sigma
+
 colnames(post_m1$spp) <- levels(d$species_sex)
 
 nombres <- colnames(post_m1$spp)

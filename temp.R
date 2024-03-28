@@ -1286,6 +1286,10 @@ m1 <-
 
 out_m1 <- m1$summary()
 
+par(mfrow = c(3, 3), mar = c(4, 4, 1, 1))
+for (i in 1:9) trace_plot(m1, out_m1$variable[i], 3)
+par(mfrow = c(1, 1))
+
 mod_diagnostics(m1, out_m1)
 
 ppcheck_m1 <- m1$draws(variables = 'ppcheck', format = 'matrix')

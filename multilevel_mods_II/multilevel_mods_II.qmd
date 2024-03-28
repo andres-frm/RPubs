@@ -862,12 +862,12 @@ El valor real de la correlación $\rho_{\beta - \tau}$ se encuentra contenido en
 
 # Ejemplo 2: pingüinos y rasgos funcionales
 
-Usaremos los datos [`palmerpenguins`](https://allisonhorst.github.io/palmerpenguins/) para analizar la relación del tamaño del ala/aleta con el tamaño corporal del pingüino. Los datos son interesantes porque nos permitirán extender el ejemplo anterior ya que involucran variables continuas y están estratificados en cuatro niveles anidados: especie (niveles = 3), sexo (niveles = 2), isla (niveles = 3) y año (niveles = 2). La idea es modelar esta relación considerando la potencial covariación entre los efectos de grupo (i.e. año e isla) y efectos poblacionales (i.e. especies y sexo). Además, permitiremos que el algoritmo explore valores estratificados por especie/sexo. 
+Usaremos los datos [`palmerpenguins`](https://allisonhorst.github.io/palmerpenguins/) para analizar la relación del tamaño del ala/aleta con el tamaño corporal del pingüino. Los datos son interesantes porque nos permitirán extender el ejemplo anterior ya que involucran variables continuas y están estratificados en cuatro niveles anidados: especie (niveles = 3), sexo (niveles = 2), isla (niveles = 3) y año (niveles = 2). La idea es modelar esta relación considerando la potencial covariación entre los efectos de grupo (i.e. año e isla) y efectos poblacionales (i.e. especies y sexo). Además, permitiremos que el algoritmo explore valores estratificados de la pendiente por especie/sexo. 
 
 Carguemos los datos y preparémoslos en el formato que requerimos:
 
 ```{r}
-d <- na.omit(penguins)
+d <- na.omit(palmerpenguins::penguins)
 
 d <- d |> dplyr::select(species, year, island, sex, flipper_length_mm, body_mass_g)
 
@@ -888,20 +888,360 @@ dat$N_spp_sex <- max(dat$species_sex)
 
 Definamos el modelo en notación matemática y luego en lenguaje `Stan`. 
 
+
 $$
 \begin{align}
 
-& largo~aleta~(mm)_{i} \sim Normal(\mu_i, ~ \sigma_i) \\
-& \mu_i = 
-
+& largo~aleta~(mm)_{i} \sim normal(\mu_i, ~ \sigma_i) \\
+& \mu_i = \theta_{species/sex_i} + \alpha_{[island_i, ~species/sex_i]} + \\ &~~~~~~~~~ \tau_{[year_i, ~species/sex_i]} + \beta_{species/sex_i}\times~masa~corporal~(g)_i \\
+& \alpha_{species/sex_i} = (diag(\sigma_\alpha), R1_{cholesky}Z_\alpha)^T \\
+& \tau_{[year_i, ~species/sex_i]} = (diag(\sigma_\tau), R1_{cholesky}Z_\tau)^T \\
+& \theta_{species/sex_i} \sim Normal(200, ~50) \\
+& \sigma_\alpha \sim exponential(1) \\
+& \sigma_\tau \sim exponential(1) \\
+& R1_{cholesky} \sim LKJCorr(2) \\
+& R2_{cholesky} \sim LKJCorr(2) \\
+& Z_\alpha \sim normal(0, 1) \\
+& Z_\tau \sim normal(0, 1)
+ 
 \end{align}
 $$
 
+Vale la pena mencionar que no empleé partial pooling para estimar los valores del intercepto $\theta_{species/sex_i}$, es discutible. No lo hice por motivos más conceptuales que metodológicos, pero perfectamente podría incluirse. También, notemos que usé una parametrización no centrada y que los parámetros $\alpha$ y $\tau$ son incluidos en el modelo como matrices dado que asigné $\theta$ como el intercepto.
+
+El modelo en lenguaje `Stan`:
 
 ```{r, eval=FALSE}
+cat(file = 'multilevel_mods_II/penguins_par_pool.stan', 
+    "
+    data{
+      int N;
+      int N_spp_sex;
+      int N_island;
+      int N_year;
+      vector[N] flipper_length_mm;
+      vector[N] body_mass_g;
+      array[N] int species_sex;
+      array[N] int year;
+      array[N] int island;
+    }
+    
+    parameters{
+      
+      matrix[N_spp_sex, N_island] z_island;  
+      cholesky_factor_corr[N_spp_sex] Rho_island;
+      vector<lower = 0>[N_spp_sex] sigma_island;
+      
+      matrix[N_spp_sex, N_year] z_year;
+      cholesky_factor_corr[N_spp_sex] Rho_year;
+      vector<lower = 0>[N_spp_sex] sigma_year;
+      
+      vector[N_spp_sex] theta;
+      vector[N_spp_sex] beta;
+      real<lower = 0> sigma;
+    }
+    
+    transformed parameters{
+    
+      matrix[N_island, N_spp_sex] alpha;
+      matrix[N_year, N_spp_sex] tau;
+      alpha = (diag_pre_multiply(sigma_island, Rho_island) * z_island)';
+      tau = (diag_pre_multiply(sigma_year, Rho_year) * z_year)';
+    }
+    
+    model{
+      vector[N] mu;
+      sigma_island ~ exponential(1);
+      sigma_year ~ exponential(1);
+      Rho_island ~ lkj_corr_cholesky(2);
+      Rho_year ~ lkj_corr_cholesky(2);
+      to_vector(z_island) ~ normal(0, 1);
+      to_vector(z_year) ~ normal(0, 1);
+      theta ~ normal(200, 50);
+      beta ~ normal(0.5, 0.5);
+      sigma ~ exponential(1);
+     
+      for (i in 1:N) {
+        mu[i] = theta[species_sex[i]] +  
+                alpha[island[i], species_sex[i]] + tau[year[i], species_sex[i]] + 
+                beta[species_sex[i]]*body_mass_g[i];
+      }
+      
+      flipper_length_mm ~ normal(mu, sigma);
+    }
+    
+    generated quantities{
+      vector[N] log_lik;
+      vector[N] mu_;
+      array[N] real ppcheck;
+      matrix[N_spp_sex, N_spp_sex] Rho_isla_corr;
+      matrix[N_spp_sex, N_spp_sex] Rho_year_corr;
+      
+      Rho_isla_corr = multiply_lower_tri_self_transpose(Rho_island);
+      Rho_year_corr = multiply_lower_tri_self_transpose(Rho_year);
+    
+      for (i in 1:N) {
+        mu_[i] = theta[species_sex[i]] +  
+                alpha[island[i], species_sex[i]] + tau[year[i], species_sex[i]] + 
+                beta[species_sex[i]]*body_mass_g[i];
+      }
+      
+      for (i in 1:N) log_lik[i] = normal_lpdf(flipper_length_mm[i] | mu_[i], sigma);
+    
+      ppcheck = normal_rng(mu_, sigma);
+    }")
+```
+
+No hay mucho elementos nuevos en el modelo. Sugeriría prestar atención a la manera en que indexé los parámetros $\alpha$ y $\tau$ y como sus previas son el resultado de la factorización de tres matrices. Ejecutemos el algoritmo y verifiquemos la calidad del ajuste:
+
+```{r, warning=FALSE}
+file <- paste(getwd(), '/penguins_par_pool.stan', sep = '')
+
+fit_m1 <- cmdstan_model(file, compile = T)
+
+m1 <- 
+  fit_m1$sample(
+    data = dat,
+    iter_sampling = 4e3,
+    iter_warmup = 500,
+    chains = 3,
+    parallel_chains = 3,
+    thin = 3,
+    refresh = 500,
+    seed = 123
+  )
+
+out_m1 <- m1$summary()
+
+par(mfrow = c(3, 3), mar = c(4, 4, 1, 1))
+for (i in 1:9) trace_plot(m1, out_m1$variable[i], 3)
+par(mfrow = c(1, 1))
+
+mod_diagnostics(m1, out_m1)
 
 ```
 
+posterior predictive check
+```{r}
+ppcheck_m1 <- m1$draws(variables = 'ppcheck', format = 'matrix')
+
+plot(NULL, main = 'Partial pooling (intercepts)', 
+     xlim = c(160, 245), ylim = c(0, 0.04), xlab = 'mm', 
+     ylab = 'Density')
+for (i in 1:100) lines(density(ppcheck_m1[i, ]), lwd = 0.1)
+lines(density(dat$flipper_length_mm), col = 'red')
+
+```
+
+
+Grafiquemos los efectos principales
+
+```{r}
+post_m1 <- m1$draws(variables = c('theta', 'alpha', 'tau', 'beta', 'sigma'), 
+                    format = 'df')
+
+post_m1 <- 
+  list(spp = post_m1[, grepl('theta', colnames(post_m1))],
+       I = post_m1[, grepl('^alpha', colnames(post_m1))],
+       Y = post_m1[, grepl('^tau', colnames(post_m1))], 
+       beta = post_m1[, grepl('beta', colnames(post_m1))], 
+       sigma = post_m1[, grepl('sigma', colnames(post_m1))])
+
+x_seq <- seq(min(dat$body_mass_g), max(dat$body_mass_g), length.out = 100)
+
+sex <- c('H', 'M')
+
+
+colnames(post_m1$spp) <- levels(d$species_sex)
+
+nombres <- colnames(post_m1$spp)
+
+est_cor <- lapply(1:ncol(post_m1$spp), FUN = 
+                    function(i) {
+                      
+                      df <- 
+                        sapply(x_seq, FUN = 
+                                 function(z) {
+                                   
+                                   post_m1$spp[, i, drop = T] + 
+                                     apply(post_m1$I, 1, mean) +
+                                     apply(post_m1$Y, 1, mean) +
+                                     post_m1$beta[, i, drop = T]*z
+                                   
+                                 })
+                      
+                      df <- do.call('rbind',
+                                    apply(df, 2, FUN = 
+                                            function(j) {
+                                              tibble(mu_est = mean(j), 
+                                                     li_est = quantile(j, 0.025), 
+                                                     ls_est = quantile(j, 0.975))
+                                            }, simplify = 'list'))
+                      
+                      df_pred <- 
+                        sapply(x_seq, FUN = 
+                                 function(z) {
+                                   
+                                   mu <- post_m1$spp[, i, drop = T] + 
+                                     apply(post_m1$I, 1, mean) +
+                                     apply(post_m1$Y, 1, mean) +
+                                     post_m1$beta[, i, drop = T]*z
+                                   
+                                   rnorm(1e3, mu, post_m1$sigma$sigma)
+                                   
+                                 })
+                      
+                      df_pred <- do.call('rbind',
+                                    apply(df_pred, 2, FUN = 
+                                            function(j) {
+                                              tibble(li_pred = quantile(j, 0.025), 
+                                                     ls_pred = quantile(j, 0.975))
+                                            }, simplify = 'list'))
+                      
+                      df <- cbind(df, df_pred)
+                      df$x <- x_seq
+                      df$spp <- gsub('^(.*)(_)(.*)$', '\\1', nombres[i])
+                      df$sex <- gsub('^(.*)(_)(.*)$', '\\3', nombres[i])
+                      df
+
+                    })
+
+est_cor <- do.call('rbind', est_cor)
+
+est_cor <- as_tibble(est_cor)
+colnames(est_cor)[7] <- 'species'
+
+ggplot() +
+  geom_point(data = d, aes(body_mass_g, flipper_length_mm, color = sex)) +
+  geom_line(data = est_cor, 
+            aes(x, mu_est, color = sex)) +
+  geom_ribbon(data = est_cor, 
+              aes(x, mu_est, fill = sex, 
+                  ymin = li_pred, ymax = ls_pred), alpha = 0.3) +
+  facet_wrap(~ species) +
+  theme_bw() +
+  labs(x = 'Masa corporal (g)', y = 'Longitud de la aleta') +
+  theme(
+    panel.grid = element_blank(),
+    legend.position = 'top',
+    legend.title = element_blank()
+  )
+
+d1_ <- unique(d[, c("species", "year", "island", "sex")])
+
+d1 <- apply(d1_, 2, FUN = 
+              function(x) {
+                
+                x <- factor(x, labels = 1:length(unique(x)))
+                as.integer(x)
+                
+              })
+
+d1 <- as_tibble(d1)
+
+sigmas <- m1$draws(format = 'df')
+sigmas <- sigmas[, grepl('sigma', colnames(sigmas))]
+
+
+est_islas_year <- lapply(1:nrow(d1), FUN = 
+                           function(x) {
+                             
+                             se <- d1$sex[[x]]
+                             s_b <- ifelse(se == 1, d1$species[[x]] + 0, 
+                                           d1$species[[x]] + 3)
+                             is <- d1$island[[x]]
+                             y <- d1$year[[x]]
+                             
+                             
+                             p <- with(post_m1, 
+                                       {
+                                         spp[, s_b, drop = T] + 
+                                           I[, is, drop = T] +
+                                           Y[, y, drop = T] +
+                                           beta[, s_b, drop = T]*mean(d$body_mass_g)
+                                         
+                                       })
+                             
+                             p <- rnorm(1e3, p, sigmas$sigma)
+                             
+                             cbind(tibble(val = p), d1_[x, ])
+                             
+                           })
+
+est_islas_year <- as_tibble(do.call('rbind', est_islas_year))
+
+est_islas_year |> 
+  ggplot() +
+  geom_boxplot(aes(year, val, fill = species)) +
+  facet_wrap( ~ island + sex) +
+  labs(x = NULL, y = 'Longitud aleta (mm)') +
+  theme_bw() +
+  theme(legend.position = 'top')
+
+sigmas <- sigmas[, c(1, 3)]
+colnames(sigmas) <- c('sigma\n(island)', 'sigma\n(year)')
+gather(sigmas) |> 
+  ggplot() +
+  geom_density(aes(value, fill = key), alpha = 0.5) +
+  theme(legend.position = 'top')
+
+
+rho_isla <- m1$draws(variables = 'Rho_isla_corr', format = 'df')
+rho_year <- m1$draws(variables = 'Rho_year_corr', format = 'df')
+
+rho_isla <- lapply(2:6, FUN = 
+                     function(i) {
+                       
+                       df <- sapply(i:6, FUN = 
+                                      function(j) {
+                                        
+                                        rho_isla[, grep(paste('^(.*)', i-1, ',', j,'.$', sep = ''), 
+                                                        colnames(rho_isla)), drop = T]
+                                        
+                                      })
+                       name <- i:6
+                       df <- as_tibble(df)
+                       
+                       for (z in seq_along(name)) colnames(df)[z] <- 
+                         paste('rho', i-1, name[z], sep = '_')
+                       df
+                     })
+rho_isla <- as_tibble(do.call('cbind', rho_isla))
+
+rho_year <- lapply(2:6, FUN = 
+                     function(i) {
+                       
+                       df <- sapply(i:6, FUN = 
+                                      function(j) {
+                                        
+                                        rho_year[, grep(paste('^(.*)', i-1, ',', j,'.$', sep = ''), 
+                                                        colnames(rho_year)), drop = T]
+                                        
+                                      })
+                       name <- i:6
+                       df <- as_tibble(df)
+                       
+                       for (z in seq_along(name)) colnames(df)[z] <- 
+                         paste('rho', i-1, name[z], sep = '_')
+                       df
+                     })
+rho_year <- as_tibble(do.call('cbind', rho_year))
+  
+rho_isla
+par(mfrow = c(1, 2), mar = c(4, 4, 1, 1))
+plot(NULL, xlim = c(-1, 1), ylim = c(0, 1.5), xlab = expression('Rho'['isla']), ylab = 'Density')
+for (i in 1:ncol(rho_isla)) {
+  lines(density(rho_isla[, i, drop = T]), col = i)
+  abline(v = mean(rho_isla[, i, drop = T]), lty = 3, col = i)
+}
+
+plot(NULL, xlim = c(-1, 1), ylim = c(0, 1.5), xlab = expression('Rho'['year']), ylab = 'Density')
+for (i in 1:ncol(rho_year)) {
+  lines(density(rho_year[, i, drop = T]), col = i)
+  abline(v = mean(rho_year[, i, drop = T]), lty = 3, col = i)
+}
+
+```
 
 
 

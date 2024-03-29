@@ -1163,7 +1163,7 @@ par(mfrow = c(1, 1))
 mod_diagnostics(m2, out_m2)
 
 
-#===============
+#=============== vamos ====
 #
 
 d <- na.omit(penguins)
@@ -1205,6 +1205,10 @@ cat(file = 'multilevel_mods_II/penguins_par_pool.stan',
     
     parameters{
       
+      vector[N_spp_sex] z_beta;
+      real mu_beta;
+      real<lower = 0> sigma_beta;
+      
       matrix[N_spp_sex, N_island] z_island;  
       cholesky_factor_corr[N_spp_sex] Rho_island;
       vector<lower = 0>[N_spp_sex] sigma_island;
@@ -1214,16 +1218,17 @@ cat(file = 'multilevel_mods_II/penguins_par_pool.stan',
       vector<lower = 0>[N_spp_sex] sigma_year;
       
       vector[N_spp_sex] theta;
-      vector[N_spp_sex] beta;
       real<lower = 0> sigma;
     }
     
     transformed parameters{
     
+      vector[N_spp_sex] beta;
       matrix[N_island, N_spp_sex] alpha;
       matrix[N_year, N_spp_sex] tau;
       alpha = (diag_pre_multiply(sigma_island, Rho_island) * z_island)';
       tau = (diag_pre_multiply(sigma_year, Rho_year) * z_year)';
+      beta = mu_beta + z_beta*sigma_beta;
     }
     
     model{
@@ -1235,7 +1240,9 @@ cat(file = 'multilevel_mods_II/penguins_par_pool.stan',
       to_vector(z_island) ~ normal(0, 1);
       to_vector(z_year) ~ normal(0, 1);
       theta ~ normal(200, 50);
-      beta ~ normal(0.5, 0.5);
+      mu_beta ~ normal(0.5, 0.5);
+      z_beta ~ normal(0, 1);
+      sigma_beta ~ exponential(1);
       sigma ~ exponential(1);
      
       for (i in 1:N) {
@@ -1268,7 +1275,8 @@ cat(file = 'multilevel_mods_II/penguins_par_pool.stan',
       ppcheck = normal_rng(mu_, sigma);
     }")
 
-file <- paste(getwd(), 'multilevel_mods_II/penguins_par_pool.stan', sep = '')
+
+file <- paste(getwd(), '/multilevel_mods_II/penguins_par_pool.stan', sep = '')
 
 fit_m1 <- cmdstan_model(file, compile = T)
 
@@ -1310,7 +1318,24 @@ post_m1 <-
        beta = post_m1[, grepl('beta', colnames(post_m1))], 
        sigma = post_m1[, grepl('sigma', colnames(post_m1))])
 
-x_seq <- seq(min(dat$body_mass_g), max(dat$body_mass_g), length.out = 100)
+d_temp <- d
+
+d_temp <- split(d_temp, list(d_temp$species, d_temp$sex))
+
+seq_x <- lapply(d_temp, FUN = 
+                  function(x) {
+                    
+                    z <- x$body_mass_g
+                    
+                    z <- seq(min(x$body_mass_g), 
+                           max(x$body_mass_g), 
+                           length.out = 100)
+                    
+                    tibble(x_seq = z, 
+                           spp_sex = x$spp_sex[[1]])
+                    
+                  })
+seq_x <- do.call('rbind', seq_x)
 
 sex <- c('H', 'M')
 
@@ -1321,6 +1346,8 @@ nombres <- colnames(post_m1$spp)
 
 est_cor <- lapply(1:ncol(post_m1$spp), FUN = 
                     function(i) {
+                      
+                      x_seq <- seq_x[seq_x$spp_sex == i, ]$x_seq
                       
                       df <- 
                         sapply(x_seq, FUN = 
@@ -1405,6 +1432,7 @@ d1 <- as_tibble(d1)
 sigmas <- m1$draws(format = 'df')
 sigmas <- sigmas[, grepl('sigma', colnames(sigmas))]
 
+d$spp_sex <- dat$species_sex
 
 est_islas_year <- lapply(1:nrow(d1), FUN = 
                            function(x) {
@@ -1415,13 +1443,13 @@ est_islas_year <- lapply(1:nrow(d1), FUN =
                              is <- d1$island[[x]]
                              y <- d1$year[[x]]
                              
-                             
                              p <- with(post_m1, 
                                        {
                                          spp[, s_b, drop = T] + 
                                            I[, is, drop = T] +
                                            Y[, y, drop = T] +
-                                           beta[, s_b, drop = T]*mean(d$body_mass_g)
+                                           beta[, s_b, drop = T] *
+                                           mean(d[d$spp_sex == s_b, ]$body_mass_g)
                                          
                                        })
                              
@@ -1441,13 +1469,49 @@ est_islas_year |>
   theme_bw() +
   theme(legend.position = 'top')
 
-sigmas <- sigmas[, c(1, 3)]
-colnames(sigmas) <- c('sigma\n(island)', 'sigma\n(year)')
-gather(sigmas) |> 
-  ggplot() +
-  geom_density(aes(value, fill = key), alpha = 0.5) +
-  theme(legend.position = 'top')
+sigmas_islas <- as.matrix(sigmas[, grep('sigma_is', colnames(sigmas))])
+sigmas_year <- as.matrix(sigmas[, grep('sigma_y', colnames(sigmas))])
 
+nombres <- unique(d[, c("species", "spp_sex", "sex")])
+
+nombres$labels <- paste(nombres$species, nombres$sex, sep = "_")
+
+nombres <- split(nombres, nombres$species)
+
+par(mfrow = c(3, 1), mar = c(4, 3.5, 1, 0.5))
+
+for (i in 1:3) {
+  
+  n1 <- nombres[[i]]$spp_sex[[1]]
+  n2 <- nombres[[i]]$spp_sex[[2]]
+  nom1 <- nombres[[i]]$sex[[1]]
+  nom2 <- nombres[[i]]$sex[[2]]
+  sp <- nombres[[i]]$species[[1]]
+  
+  plot(density(sigmas_islas[, n1]), col = 2, lwd = 3, 
+       xlim = c(-0.5, 8), ylim = c(0, 1.3), main = sp, lty = 1,
+       xlab = expression(sigma))
+  lines(density(sigmas_year[, n1]), col = 2, lwd = 3, lty = 3)
+  lines(density(sigmas_islas[, n2]), col = 4, lwd = 3, lty = 1)
+  lines(density(sigmas_year[, n2]), col = 4, lwd = 3, lty = 3)
+  legend(x = 4, y = 1.1, 
+         legend = c(paste(nom1, '- isla'), 
+                    paste(nom1, '- año'),
+                    paste(nom2, '- isla'), 
+                    paste(nom2, '- año')),
+         col = c(2, 2, 4, 4), lty = rep(c(1, 3), 2), cex = 0.8, lwd = 3)
+}
+
+par(mfrow = c(1, 1))
+
+plot(NULL, main = '', xlab = expression(sigma), 
+     xlim = c(-0.1, 8), ylim = c(0, 1.3), ylab = 'Density')
+for (i in 1:6) lines(density(sigmas_islas[, i]), col = 2, lwd = 3)
+for (i in 1:6) lines(density(sigmas_year[, i]), col = 4, lwd = 3)
+legend(x = 4, y = 1.1, 
+       legend = c(expression(sigma['islas-spp/sex']), 
+                  expression(sigma['año-spp/sex'])),
+       col = c(2, 4), lty = 1, cex = 1.1, lwd = 3)
 
 rho_isla <- m1$draws(variables = 'Rho_isla_corr', format = 'df')
 rho_year <- m1$draws(variables = 'Rho_year_corr', format = 'df')
@@ -1490,7 +1554,7 @@ rho_year <- lapply(2:6, FUN =
                      })
 rho_year <- as_tibble(do.call('cbind', rho_year))
   
-rho_isla
+
 par(mfrow = c(1, 2), mar = c(4, 4, 1, 1))
 plot(NULL, xlim = c(-1, 1), ylim = c(0, 1.5), xlab = expression('Rho'['isla']), ylab = 'Density')
 for (i in 1:ncol(rho_isla)) {
@@ -1504,7 +1568,7 @@ for (i in 1:ncol(rho_year)) {
   abline(v = mean(rho_year[, i, drop = T]), lty = 3, col = i)
 }
 
-
+par(mfrow = c(1, 1))
 
 
 

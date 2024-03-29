@@ -1326,7 +1326,7 @@ par(mfrow = c(1, 1))
 
 Las distribuciones posteriores están más o menos centradas en $\rho = 0$, así que no tenemos evidencia que indique una co-variación de los parámetros --tal vez un poco para algunos niveles de $\rho_{isla-species/sex}$, pero en cualquier caso nada contundente. 
 
-![Iris (derecha) y Ziggy (isquierda) viéndo, complacidos, cómo llegaste hasta el final.](/Users/andres/Documents/github_repos/RPubs/multilevel_mods_II/iris_ziggy.jpg){width="45%"}
+![Iris (derecha) y Ziggy (izquierda) viéndo, complacidos, cómo llegaste hasta el final.](/Users/andres/Documents/github_repos/RPubs/multilevel_mods_II/iris_ziggy.jpg){width="45%"}
 
 ```{r}
 sessionInfo()

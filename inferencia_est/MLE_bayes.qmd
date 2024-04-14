@@ -147,7 +147,7 @@ abline(h = 0.5)
 ```
 En Bayes, por el contrario, la definición de la probabilidad es epistémica. Es decir, surge de nuestras creencias o conocimiento previo del fenómeno, el cual representamos en forma de distribuciones de probabilidad de parámetros. Continuemos con el ejemplo de la moneda:
 
-Ahora incluyamos a alguien más en el experimento. Esta vez, el participante debe hacer una apuesta inicial acerca de la frecuencia de caras y emplear el teorema de Bayes para actualizar dicha creencia con cada lanzamiento de la moneda. Por alguna razón, esta persona supone que la frecuencia de caras es más baja que la de sello, y lo expresa usando una distribución $beta(1, 1)$. En estadística bayesiana esta *apuesta inicial* se conoce como **distribución previa**, se trata de $P(\phi)$ en el la regla de Bayes. Veamos gráficamente lo que implica:
+Ahora incluyamos a alguien más en el experimento. Esta vez, el participante debe hacer una apuesta inicial acerca de la frecuencia de caras y emplear el teorema de Bayes para actualizar dicha creencia con cada lanzamiento de la moneda. Por alguna razón, esta persona supone que la frecuencia de caras es más baja que la de sello, y lo expresa usando una distribución $beta(1.5, 7)$. En estadística bayesiana esta *apuesta inicial* se conoce como **distribución previa**, se trata de $P(\phi)$ en el la regla de Bayes. Veamos gráficamente lo que implica:
 
 ```{r}
 grilla <- seq(0.001, 0.999, length.out = 1e3)
@@ -174,7 +174,7 @@ for (i in 1:length(previa_actualizada)) {
 ```
 
 :::{}
-i. Iteramos sobre cada $observación_i$ (`obs[i]`) para generar una distribución posterior ($P(\phi | datos)$) dado el producto de la verosimilitud ($P(datos | \phi)$ = `dbinom(obs[i], 1, prob = grilla)`) y la distribución previa ($P(\phi)$ = $beta(1, 1)$ = `previa`). En este punto es importante aclarar que:
+i. Iteramos sobre cada $observación_i$ (`obs[i]`) para generar una distribución posterior ($P(\phi | datos)$) dado el producto de la verosimilitud ($P(datos | \phi)$ = `dbinom(obs[i], 1, prob = grilla)`) y la distribución previa ($P(\phi)$ = $beta(1.5, 7)$ = `previa`). En este punto es importante aclarar que:
 
 
 $$
